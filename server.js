@@ -144,7 +144,7 @@ function requestHandler(req, res) {
                     if (user.verified) {
                         // Already registered and verified; let them log in directly
                         res.writeHead(200, { 'Content-Type': 'application/json' });
-                        res.end(JSON.stringify({ message: 'Already registered', code: null }));
+                        res.end(JSON.stringify({ message: 'Already registered' }));
                         return;
                     } else {
                         // Re-register; generate new code and send
@@ -153,7 +153,8 @@ function requestHandler(req, res) {
                         saveUsers(users);
                         sendEmail(email, 'Verification Code', `Your verification code is: ${code}`);
                         res.writeHead(200, { 'Content-Type': 'application/json' });
-                        res.end(JSON.stringify({ message: 'Verification code resent', code }));
+                        // Do not include the code in the response; instruct user to check email
+                        res.end(JSON.stringify({ message: 'Verification code resent' }));
                         return;
                     }
                 } else {
@@ -163,7 +164,8 @@ function requestHandler(req, res) {
                     saveUsers(users);
                     sendEmail(email, 'Verification Code', `Your verification code is: ${code}`);
                     res.writeHead(200, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ message: 'Registration successful', code }));
+                    // Do not include the code in the response; instruct user to check email
+                    res.end(JSON.stringify({ message: 'Registration successful' }));
                     return;
                 }
             }

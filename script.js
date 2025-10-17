@@ -36,7 +36,7 @@ function init() {
  * Register a new user with an email address. Sends a POST request to the server's /register endpoint.
  * If successful, prompts the user to enter the verification code sent to their email.
  */
-function registerUser() {
+async function registerUser() {
     const emailInput = document.getElementById('email-input');
     const email = emailInput.value.trim().toLowerCase();
     const authMessage = document.getElementById('auth-message');
@@ -45,33 +45,33 @@ function registerUser() {
         authMessage.textContent = 'Please enter a valid email address.';
         return;
     }
-    // Load existing users from localStorage
-    const users = loadUsers();
-    let user = users.find(u => u.email === email);
-    if (user && user.verified) {
-        authMessage.textContent = 'This email is already registered and verified. Please log in.';
-        return;
+    try {
+        const response = await fetch('/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email })
+        });
+        const data = await response.json();
+        if (response.ok) {
+            currentEmail = email;
+            showVerificationSection();
+            const verificationInfo = document.getElementById('verification-info');
+            // Inform the user to check their email without revealing the code
+            verificationInfo.textContent = `${data.message}. Please check your email for the verification code.`;
+        } else {
+            authMessage.textContent = data.error || 'Registration failed.';
+        }
+    } catch (err) {
+        authMessage.textContent = 'An error occurred during registration.';
+        console.error(err);
     }
-    // Generate a 6‑digit verification code
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    if (user) {
-        user.code = code;
-    } else {
-        user = { email, code, verified: false, purchases: [] };
-        users.push(user);
-    }
-    saveUsers(users);
-    currentEmail = email;
-    showVerificationSection();
-    const verificationInfo = document.getElementById('verification-info');
-    verificationInfo.textContent = `A verification code has been sent to your email. (For demo purposes, your code is ${code}).`;
 }
 
 /**
  * Verify a user's email with the provided code. Sends a POST request to /verify.
  * On success, logs the user in.
  */
-function verifyUser() {
+async function verifyUser() {
     const codeInput = document.getElementById('code-input');
     const code = codeInput.value.trim();
     const verificationMessage = document.getElementById('verification-message');
@@ -84,31 +84,28 @@ function verifyUser() {
         verificationMessage.textContent = 'Please enter the verification code.';
         return;
     }
-    const users = loadUsers();
-    const user = users.find(u => u.email === currentEmail);
-    if (!user) {
-        verificationMessage.textContent = 'User not found. Please register again.';
-        return;
-    }
-    if (user.verified) {
-        // Already verified
-        loginSuccess(currentEmail);
-        return;
-    }
-    if (user.code === code) {
-        user.verified = true;
-        user.code = null;
-        saveUsers(users);
-        loginSuccess(currentEmail);
-    } else {
-        verificationMessage.textContent = 'Incorrect verification code.';
+    try {
+        const response = await fetch('/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: currentEmail, code })
+        });
+        const data = await response.json();
+        if (response.ok) {
+            loginSuccess(currentEmail);
+        } else {
+            verificationMessage.textContent = data.error || 'Verification failed.';
+        }
+    } catch (err) {
+        verificationMessage.textContent = 'An error occurred during verification.';
+        console.error(err);
     }
 }
 
 /**
  * Log in a user with an existing verified email. Sends a POST request to /login.
  */
-function loginUser() {
+async function loginUser() {
     const emailInput = document.getElementById('email-input');
     const email = emailInput.value.trim().toLowerCase();
     const authMessage = document.getElementById('auth-message');
@@ -117,19 +114,23 @@ function loginUser() {
         authMessage.textContent = 'Please enter a valid email address.';
         return;
     }
-    const users = loadUsers();
-    const user = users.find(u => u.email === email);
-    if (!user) {
-        authMessage.textContent = 'User not found. Please register first.';
-        return;
+    try {
+        const response = await fetch('/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email })
+        });
+        const data = await response.json();
+        if (response.ok) {
+            currentEmail = email;
+            loginSuccess(email);
+        } else {
+            authMessage.textContent = data.error || 'Login failed.';
+        }
+    } catch (err) {
+        authMessage.textContent = 'An error occurred during login.';
+        console.error(err);
     }
-    if (!user.verified) {
-        authMessage.textContent = 'User not verified. Please check your email and verify.';
-        return;
-    }
-    // Login successful
-    currentEmail = email;
-    loginSuccess(email);
 }
 
 /**
@@ -153,8 +154,13 @@ function loginSuccess(email) {
     // Reset selections
     selectedSeatIds = [];
     updateSelectedSummary();
-    // Load seats from localStorage
-    loadSeatsFromStorage();
+    // Fetch seat data from server
+    fetchSeats();
+    // Optionally refresh seats periodically to reflect new purchases
+    if (typeof window.seatRefreshInterval === 'number') {
+        clearInterval(window.seatRefreshInterval);
+    }
+    window.seatRefreshInterval = setInterval(fetchSeats, 15000);
 }
 
 /**
@@ -180,6 +186,12 @@ function signOut() {
     // Reset seat selections
     selectedSeatIds = [];
     updateSelectedSummary();
+
+    // Clear any periodic seat refresh
+    if (typeof window.seatRefreshInterval === 'number') {
+        clearInterval(window.seatRefreshInterval);
+        window.seatRefreshInterval = null;
+    }
 }
 
 /**
@@ -193,9 +205,20 @@ function showVerificationSection() {
 /**
  * Fetch seat data from the server and render the seat map.
  */
-function fetchSeats() {
-    // This function is unused in localStorage version but kept for compatibility
-    loadSeatsFromStorage();
+async function fetchSeats() {
+    try {
+        const response = await fetch('/seats');
+        const data = await response.json();
+        if (response.ok && Array.isArray(data)) {
+            seats = data;
+            renderSeatMap();
+            updateAvailableCount();
+        } else {
+            console.error('Failed to fetch seats:', data);
+        }
+    } catch (err) {
+        console.error('Error fetching seats:', err);
+    }
 }
 
 /**
@@ -374,51 +397,41 @@ function openCheckoutModal() {
 /**
  * Confirm the purchase: send selected seats to the server, handle the response, and refresh seat data.
  */
-function confirmPurchase() {
+async function confirmPurchase() {
+    const modal = document.getElementById('checkout-modal');
     if (!currentEmail || selectedSeatIds.length === 0) {
         return;
     }
-    // Load seats and users from storage
-    const seatsData = seats; // already loaded in memory
-    const users = loadUsers();
-    const user = users.find(u => u.email === currentEmail);
-    if (!user || !user.verified) {
-        alert('User not found or not verified.');
-        return;
-    }
-    // Check if any selected seats are already sold
-    const unavailable = [];
-    selectedSeatIds.forEach(id => {
-        const seat = seatsData.find(s => s.id === id);
-        if (!seat || seat.status !== 'available') {
-            unavailable.push(id);
+    try {
+        const response = await fetch('/purchase', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: currentEmail, seats: selectedSeatIds })
+        });
+        const data = await response.json();
+        if (response.ok) {
+            // Successful purchase; refresh seat data and clear selection
+            selectedSeatIds = [];
+            modal.classList.add('hidden');
+            modal.setAttribute('aria-hidden', 'true');
+            updateSelectedSummary();
+            await fetchSeats();
+            alert(data.message + ' A receipt has been sent to your email.');
+        } else {
+            // Purchase failed (e.g., seats unavailable)
+            alert(data.error || 'Purchase failed.');
+            modal.classList.add('hidden');
+            modal.setAttribute('aria-hidden', 'true');
+            // Refresh seats to reflect current state
+            await fetchSeats();
+            updateSelectedSummary();
         }
-    });
-    const modal = document.getElementById('checkout-modal');
-    if (unavailable.length > 0) {
-        alert(`Seats unavailable: ${unavailable.join(', ')}`);
+    } catch (err) {
+        console.error('Error during purchase:', err);
+        alert('An error occurred during purchase.');
         modal.classList.add('hidden');
         modal.setAttribute('aria-hidden', 'true');
-        return;
     }
-    // Mark seats as sold
-    selectedSeatIds.forEach(id => {
-        const seat = seatsData.find(s => s.id === id);
-        if (seat) seat.status = 'sold';
-    });
-    saveSeatsToStorage(seatsData);
-    // Record purchase for user
-    if (!Array.isArray(user.purchases)) user.purchases = [];
-    user.purchases.push({ seats: selectedSeatIds.slice(), timestamp: Date.now() });
-    saveUsers(users);
-    // Clear selections and refresh UI
-    selectedSeatIds = [];
-    modal.classList.add('hidden');
-    modal.setAttribute('aria-hidden', 'true');
-    renderSeatMap();
-    updateAvailableCount();
-    updateSelectedSummary();
-    alert('Purchase successful! A receipt has been sent to your email.');
 }
 
 /**
