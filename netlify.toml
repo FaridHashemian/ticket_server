@@ -1,0 +1,17 @@
+# netlify.toml — proxy API and SPA fallback
+[[redirects]]
+  from = "/api/*"
+  to = "https://api.isaconcertticket.com/api/:splat"
+  status = 200
+  force = true
+
+[[headers]]
+  for = "/api/*"
+  [headers.values]
+    Cache-Control = "no-store"
+    Pragma = "no-cache"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
