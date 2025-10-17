@@ -1,4 +1,7 @@
-// Patched Node server: all /api/* responses are JSON, even on 404/500.
+// Backend for isaconcertticket.com — Fly.io bundle
+// Uses DATA_DIR=/data (volume) for users.json, seats.json, emails/
+// Exposes /api/* JSON endpoints and static file serving for '/' if needed.
+
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -6,7 +9,7 @@ const path = require('path');
 let nodemailer = null;
 try { nodemailer = require('nodemailer'); } catch {}
 
-const DATA_DIR = __dirname;
+const DATA_DIR = process.env.DATA_DIR || __dirname;
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const SEATS_FILE = path.join(DATA_DIR, 'seats.json');
 const EMAILS_DIR = path.join(DATA_DIR, 'emails');
@@ -36,6 +39,7 @@ function generateInitialSeats(){
   return seats;
 }
 
+// Seed stores if missing
 if (!fs.existsSync(SEATS_FILE)) writeJSON(SEATS_FILE, generateInitialSeats());
 if (!fs.existsSync(USERS_FILE)) writeJSON(USERS_FILE, []);
 
@@ -48,10 +52,7 @@ function sendJSON(res, code, obj){
   });
   res.end(JSON.stringify(obj));
 }
-
-function sendApiNotFound(res){
-  sendJSON(res, 404, { error: 'Not found' });
-}
+function sendApiNotFound(res){ sendJSON(res, 404, { error: 'Not found' }); }
 
 function serveStatic(req, res){
   const url = req.url === '/' ? '/index.html' : req.url;
@@ -68,7 +69,6 @@ function serveStatic(req, res){
     res.end(data);
   });
 }
-
 function sendPlainNotFound(res){
   res.writeHead(404, {'Content-Type':'text/plain; charset=utf-8'});
   res.end('Not found');
@@ -117,12 +117,8 @@ async function handleAPI(req, res){
     const users = readJSON(USERS_FILE, []);
     let user = users.find(u=>u.email===email);
     const code = String(Math.floor(100000 + Math.random()*900000));
-    if(user){
-      user.code = code;
-    } else {
-      user = { email, code, verified:false, purchases:[] };
-      users.push(user);
-    }
+    if(user){ user.code = code; }
+    else { user = { email, code, verified:false, purchases:[] }; users.push(user); }
     writeJSON(USERS_FILE, users);
     await sendEmail(email, 'Your Verification Code', `Your verification code is: ${code}`);
     return sendJSON(res, 200, { ok:true, message:'Verification code sent' });
@@ -189,7 +185,7 @@ function requestHandler(req, res){
   }
 }
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080; // Fly sets PORT
 http.createServer(requestHandler).listen(PORT, ()=>{
   console.log(`Server listening on port ${PORT}`);
 });
