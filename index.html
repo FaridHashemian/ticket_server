@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Concert Ticket Booking</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- A simple ticketing website for a 250‑seat concert. -->
+    <!-- The layout is generated dynamically in script.js to ensure exactly 250 seats. -->
+</head>
+<body>
+    <header class="site-header">
+        <h1>Concert Ticket Booking</h1>
+        <p id="auth-header-message">Register or log in to start booking your seats.</p>
+        <p id="available-count" class="hidden">Available seats: <span>250</span></p>
+        <!-- User info and sign out button will be shown after login -->
+        <div id="user-info" class="hidden">
+            Logged in as <span id="user-email"></span>
+            <button id="signout-btn" class="secondary-btn">Sign Out</button>
+        </div>
+    </header>
+    <main class="site-main">
+        <!-- Authentication container: shows registration, login and verification forms -->
+        <div id="auth-container" class="auth-container">
+            <div id="sign-in-section" class="auth-section">
+                <h2>Register or Sign In</h2>
+                <label for="email-input">Email:</label>
+                <input type="email" id="email-input" placeholder="you@example.com" required />
+                <div class="auth-actions">
+                    <button id="register-btn" class="primary-btn">Register</button>
+                    <button id="login-btn" class="secondary-btn">Login</button>
+                </div>
+                <p id="auth-message" class="auth-message"></p>
+            </div>
+            <div id="verification-section" class="auth-section hidden">
+                <h2>Email Verification</h2>
+                <p id="verification-info">A verification code has been sent to your email.</p>
+                <label for="code-input">Enter Code:</label>
+                <input type="text" id="code-input" placeholder="123456" />
+                <button id="verify-btn" class="primary-btn">Verify</button>
+                <p id="verification-message" class="auth-message"></p>
+            </div>
+        </div>
+        <!-- Seat map will be rendered here by JavaScript -->
+        <div id="seat-map" class="seat-map hidden"></div>
+        <!-- Selected seats summary -->
+        <aside id="summary" class="summary hidden">
+            <h2>Your Selection</h2>
+            <ul id="selected-seats" class="selected-seats"></ul>
+            <p id="total-price">Total price: $0</p>
+            <button id="checkout-btn" class="primary-btn" disabled>Checkout</button>
+        </aside>
+    </main>
+
+    <!-- Modal for checkout confirmation -->
+    <div id="checkout-modal" class="modal hidden" role="dialog" aria-hidden="true">
+        <div class="modal-content">
+            <h2>Checkout Summary</h2>
+            <p id="summary-seats"></p>
+            <p id="summary-price"></p>
+            <div class="modal-actions">
+                <button id="confirm-btn" class="primary-btn">Confirm Purchase</button>
+                <button id="cancel-btn" class="secondary-btn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <footer class="site-footer">
+        <p>&copy; 2025 Concert Organizer</p>
+    </footer>
+    <script src="script.js"></script>
+</body>
+</html>
