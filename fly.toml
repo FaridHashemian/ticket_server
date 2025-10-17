@@ -1,6 +1,6 @@
 # fly.toml
 app = "isa-concert-backend"      # <--- change to your desired app name
-primary_region = "ams"           # <--- choose your closest region
+primary_region = "iad"           # <--- choose your closest region
 
 [build]
   dockerfile = "Dockerfile"
