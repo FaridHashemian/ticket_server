@@ -2,16 +2,21 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Concert Ticket Booking</title>
-  <link rel="stylesheet" href="style.css"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Concert Seat Registration (Free)</title>
+  <link rel="stylesheet" href="style.css" />
   <!-- Frontend calls https://isaconcertticket.com/api/... and Netlify proxies it -->
   <meta name="api-base" content="https://isaconcertticket.com">
 </head>
 <body>
+  <!-- Splash (3–4s) -->
+  <div id="splash" aria-hidden="true">
+    <img src="/logo.png" alt="Event logo" />
+  </div>
+
   <header class="site-header">
-    <h1>Concert Ticket Booking</h1>
-    <p id="auth-header-message">Register or log in to start booking your seats.</p>
+    <h1>Concert Seat Registration</h1>
+    <p id="auth-header-message">Register or log in to reserve your free seats (max 2 per email).</p>
     <p id="available-count" class="hidden">Available seats: <span>250</span></p>
     <div id="user-info" class="hidden">
       Logged in as <span id="user-email"></span>
@@ -19,46 +24,83 @@
     </div>
   </header>
 
-  <main class="site-main">
-    <div id="auth-container" class="auth-container">
-      <div id="sign-in-section" class="auth-section">
-        <h2>Register or Sign In</h2>
-        <label for="email-input">Email:</label>
-        <input type="email" id="email-input" placeholder="you@example.com" required />
-        <div class="auth-actions">
-          <button id="register-btn" class="primary-btn">Register</button>
-          <button id="login-btn" class="secondary-btn">Login</button>
+  <main class="wrapper">
+    <section class="layout">
+      <div class="content">
+        <div id="auth-container" class="auth-card">
+          <div id="sign-in-section" class="auth-section">
+            <h3>Register or Sign In</h3>
+
+            <label for="email-input">Email</label>
+            <input type="email" id="email-input" placeholder="you@example.com" required />
+
+            <div class="grid-2">
+              <div>
+                <label for="first-input">First name</label>
+                <input type="text" id="first-input" placeholder="First name" />
+              </div>
+              <div>
+                <label for="last-input">Last name</label>
+                <input type="text" id="last-input" placeholder="Last name" />
+              </div>
+            </div>
+
+            <label for="phone-input">Phone number</label>
+            <input type="text" id="phone-input" placeholder="e.g., 479-555-1234" />
+
+            <fieldset class="affil">
+              <legend>Are you a University of Arkansas student or staff?</legend>
+              <label><input type="radio" name="affil" value="none" checked /> Neither</label>
+              <label><input type="radio" name="affil" value="student" /> Student</label>
+              <label><input type="radio" name="affil" value="staff" /> Staff (must use @uark.edu)</label>
+            </fieldset>
+
+            <div class="btn-row">
+              <button id="register-btn" class="btn primary">Register</button>
+              <button id="login-btn" class="btn ghost">Login</button>
+            </div>
+            <p id="auth-message" class="error"></p>
+          </div>
+
+          <div id="verification-section" class="auth-section hidden">
+            <h3>Email Verification</h3>
+            <p id="verification-info">A verification code has been sent to your email.</p>
+            <label for="code-input">Verification code</label>
+            <input type="text" id="code-input" placeholder="123456" />
+            <div class="btn-row">
+              <button id="verify-btn" class="btn primary">Verify</button>
+            </div>
+            <p id="verification-message" class="error"></p>
+          </div>
         </div>
-        <p id="auth-message" class="auth-message"></p>
-      </div>
-      <div id="verification-section" class="auth-section hidden">
-        <h2>Email Verification</h2>
-        <p id="verification-info">A verification code has been sent to your email.</p>
-        <label for="code-input">Enter Code:</label>
-        <input type="text" id="code-input" placeholder="123456" />
-        <button id="verify-btn" class="primary-btn">Verify</button>
-        <p id="verification-message" class="auth-message"></p>
-      </div>
-    </div>
 
-    <div id="seat-map" class="seat-map hidden"></div>
+        <div id="seats-panel" class="seats-card hidden">
+          <div class="legend">
+            <span class="chip"><span class="dot available"></span> Available</span>
+            <span class="chip"><span class="dot selected"></span> Selected</span>
+            <span class="chip"><span class="dot sold"></span> Reserved</span>
+          </div>
+          <div id="seat-map" class="seats-grid"></div>
+        </div>
+      </div>
 
-    <aside id="summary" class="summary hidden">
-      <h2>Your Selection</h2>
-      <ul id="selected-seats" class="selected-seats"></ul>
-      <p id="total-price">Total price: $0</p>
-      <button id="checkout-btn" class="primary-btn" disabled>Checkout</button>
-    </aside>
+      <aside id="summary" class="sidebar hidden">
+        <h2>Your Selection</h2>
+        <p class="muted">All tickets are free. You may reserve up to <strong>2 seats</strong> total.</p>
+        <ul id="selected-seats" class="selected-seats"></ul>
+        <p class="total">Selected: <span id="sel-count">0</span> / 2</p>
+        <button id="checkout-btn" class="checkout" disabled>Confirm Reservation</button>
+      </aside>
+    </section>
   </main>
 
   <div id="checkout-modal" class="modal hidden" role="dialog" aria-hidden="true">
     <div class="modal-content">
-      <h2>Checkout Summary</h2>
+      <h2>Confirm Reservation</h2>
       <p id="summary-seats"></p>
-      <p id="summary-price"></p>
       <div class="modal-actions">
-        <button id="confirm-btn" class="primary-btn">Confirm Purchase</button>
-        <button id="cancel-btn" class="secondary-btn">Cancel</button>
+        <button id="confirm-btn" class="btn primary">Confirm</button>
+        <button id="cancel-btn" class="btn ghost">Cancel</button>
       </div>
     </div>
   </div>
@@ -66,6 +108,7 @@
   <footer class="site-footer">
     <p>&copy; 2025 Concert Organizer</p>
   </footer>
+
   <script src="script.js"></script>
 </body>
 </html>
