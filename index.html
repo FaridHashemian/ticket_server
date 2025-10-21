@@ -4,11 +4,20 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Concert Seat Registration (Free)</title>
+
+  <!-- Preload the splash GIF for instant display -->
+  <link rel="preload" as="image" href="/logo.gif" />
+
   <link rel="stylesheet" href="style.css" />
   <!-- Frontend calls https://isaconcertticket.com/api/... and Netlify proxies it -->
   <meta name="api-base" content="https://isaconcertticket.com">
 </head>
 <body>
+  <!-- 2s splash (silent) -->
+  <div id="splash" aria-hidden="true">
+    <img src="/logo.gif" alt="Event logo" />
+  </div>
+
   <header class="site-header">
     <h1>Concert Seat Registration</h1>
     <p id="auth-header-message">Register or log in to reserve your free seats (max 2 per email).</p>

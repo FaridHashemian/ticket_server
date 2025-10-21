@@ -4,6 +4,18 @@ body{background:#f7f9fb;color:#1f2937;line-height:1.4}
 .required{color:#ef4444}
 .muted{color:#6b7280}
 
+/* 2s splash */
+#splash{
+  position:fixed; inset:0; background:#0b1220;
+  display:grid; place-items:center; z-index:1000;
+  animation: fadeOut 0.4s ease 2s forwards; /* 2 sec delay then fade */
+}
+#splash img{
+  width:min(54vw,240px); height:auto;
+  filter:drop-shadow(0 12px 30px rgba(0,0,0,.35));
+}
+@keyframes fadeOut{to{opacity:0;visibility:hidden}}
+
 .site-header{padding:24px 16px;text-align:center;background:#111827;color:#fff}
 .site-header h1{font-size:28px;margin-bottom:8px}
 

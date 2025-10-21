@@ -1,4 +1,4 @@
-/* Netlify-ready frontend (free tickets, max 2 seats, strong validation) */
+/* Frontend w/ 2s splash, strong validation, free tickets, max 2 seats */
 let currentEmail = null;
 let seats = [];
 let selectedSeatIds = [];
@@ -10,6 +10,14 @@ function getApiBase(){
   return window.location.origin.replace(/\/+$/,'') + '/api';
 }
 const API_BASE = getApiBase();
+
+/* Splash: hide after 2s once page fully loaded */
+window.addEventListener('load', ()=>{
+  setTimeout(()=>{
+    const s = document.getElementById('splash');
+    if(s){ s.style.display='none'; }
+  }, 2000);
+});
 
 async function jsonFetch(url, options={}){
   const res = await fetch(url, options);
@@ -68,7 +76,6 @@ async function registerUser(){
       headers:{"Content-Type":"application/json"},
       body: JSON.stringify({ email, first, last, phone, affiliation })
     });
-    // If backend ever returns a message, show it; otherwise proceed
     document.getElementById('verification-info').textContent = data.message || "A verification code has been sent to your email.";
     showVerificationSection();
   }catch(err){
