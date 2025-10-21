@@ -1,4 +1,5 @@
-/* Full robust Netlify-ready frontend */
+// Frontend — free tickets, max 2 per email, responsive + splash
+
 let currentEmail = null;
 let seats = [];
 let selectedSeatIds = [];
@@ -11,16 +12,21 @@ function getApiBase(){
 }
 const API_BASE = getApiBase();
 
+// Splash hide (3s)
+window.addEventListener('load', ()=>{
+  setTimeout(()=>{ const s = document.getElementById('splash'); if(s){ s.style.display='none'; } }, 3000);
+});
+
 async function jsonFetch(url, options={}){
   const res = await fetch(url, options);
   const ctype = (res.headers.get('content-type')||'').toLowerCase();
-  const bodyText = await res.text();
+  const text = await res.text();
   if(!ctype.includes('application/json')){
-    const short = bodyText.slice(0,200).replace(/\s+/g,' ').trim();
+    const short = text.slice(0,200).replace(/\s+/g,' ').trim();
     throw new Error(`Expected JSON but got '${ctype || 'unknown'}'. Response starts with: ${short}`);
   }
   let data;
-  try { data = JSON.parse(bodyText); } catch (e) {
+  try { data = JSON.parse(text); } catch (e) {
     throw new Error(`Invalid JSON response: ${e.message}`);
   }
   if(!res.ok){
@@ -35,18 +41,34 @@ function init(){
   document.getElementById('verify-btn').addEventListener('click', verifyUser);
   document.getElementById('signout-btn').addEventListener('click', signOut);
   document.getElementById('checkout-btn').addEventListener('click', openCheckoutModal);
+
   attachModalHandlers();
+}
+
+function readAffil(){
+  const el = document.querySelector('input[name="affil"]:checked');
+  return el ? el.value : 'none';
 }
 
 async function registerUser(){
   const email = document.getElementById('email-input').value.trim().toLowerCase();
+  const first = document.getElementById('first-input').value.trim();
+  const last  = document.getElementById('last-input').value.trim();
+  const phone = document.getElementById('phone-input').value.trim();
+  const affil = readAffil();
   const msg = document.getElementById('auth-message');
   msg.textContent = "";
+
   if(!email){ msg.textContent = "Please enter a valid email."; return; }
+  if(affil === 'staff' && !/@uark\.edu$/i.test(email)){
+    msg.textContent = "Staff must use a @uark.edu email address.";
+    return;
+  }
   try{
     await jsonFetch(`${API_BASE}/register`, {
-      method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ email })
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ email, first, last, phone, affiliation: affil })
     });
     document.getElementById('verification-info').textContent = "A verification code has been sent to your email.";
     showVerificationSection();
@@ -91,15 +113,18 @@ async function loginUser(){
 
 function loginSuccess(email){
   currentEmail = email;
+
   document.getElementById('auth-container').classList.add('hidden');
   document.getElementById('verification-section').classList.add('hidden');
   document.getElementById('sign-in-section').classList.add('hidden');
-  document.getElementById('seat-map').classList.remove('hidden');
+
+  document.getElementById('seats-panel').classList.remove('hidden');
   document.getElementById('summary').classList.remove('hidden');
   document.getElementById('available-count').classList.remove('hidden');
   document.getElementById('user-info').classList.remove('hidden');
+
   document.getElementById('user-email').textContent = email;
-  document.getElementById('auth-header-message').textContent = 'Select your seats below.';
+  document.getElementById('auth-header-message').textContent = 'Select up to 2 seats below.';
 
   selectedSeatIds = [];
   updateSelectedSummary();
@@ -111,18 +136,22 @@ function loginSuccess(email){
 function signOut(){
   currentEmail = null;
   if(seatRefreshInterval){ clearInterval(seatRefreshInterval); seatRefreshInterval = null; }
-  document.getElementById('seat-map').classList.add('hidden');
+
+  document.getElementById('seats-panel').classList.add('hidden');
   document.getElementById('summary').classList.add('hidden');
   document.getElementById('available-count').classList.add('hidden');
   document.getElementById('user-info').classList.add('hidden');
+
   document.getElementById('auth-container').classList.remove('hidden');
   document.getElementById('sign-in-section').classList.remove('hidden');
   document.getElementById('verification-section').classList.add('hidden');
-  document.getElementById('auth-header-message').textContent = 'Register or log in to start booking your seats.';
+
+  document.getElementById('auth-header-message').textContent = 'Register or log in to reserve your free seats (max 2).';
   document.getElementById('email-input').value = '';
   document.getElementById('code-input').value = '';
-  document.getElementById('auth-message').textContent = '';
-  document.getElementById('verification-message').textContent = '';
+  document.getElementById('first-input').value = '';
+  document.getElementById('last-input').value  = '';
+  document.getElementById('phone-input').value = '';
   selectedSeatIds = [];
   updateSelectedSummary();
 }
@@ -146,24 +175,32 @@ async function fetchSeats(){
 function renderSeatMap(){
   const seatMapEl = document.getElementById('seat-map');
   seatMapEl.innerHTML = '';
+
   seats.forEach(seat => {
     const seatEl = document.createElement('div');
     seatEl.classList.add('seat');
     seatEl.dataset.seatId = seat.id;
     seatEl.textContent = seat.id;
-    if (seat.status === 'sold') seatEl.classList.add('sold'); else seatEl.classList.add('available');
-    if (['A','B'].includes(seat.row)) seatEl.classList.add('vip');
+    if (seat.status === 'sold') seatEl.classList.add('sold');
     if (selectedSeatIds.includes(seat.id)) seatEl.classList.add('selected');
-    seatEl.addEventListener('click', () => toggleSeatSelection(seat.id));
+
+    seatEl.addEventListener('click', () => {
+      if (seat.status === 'sold') return;
+
+      // Hard-limit to 2 seats selected
+      if (!selectedSeatIds.includes(seat.id) && selectedSeatIds.length >= 2) {
+        alert('You can select at most 2 seats.');
+        return;
+      }
+      toggleSeatSelection(seat.id);
+    });
     seatMapEl.appendChild(seatEl);
   });
 }
 
 function toggleSeatSelection(seatId){
-  const seat = seats.find(s => s.id === seatId);
-  if(!seat || seat.status === 'sold') return;
   const idx = selectedSeatIds.indexOf(seatId);
-  if(idx>=0) selectedSeatIds.splice(idx,1);
+  if(idx >= 0) selectedSeatIds.splice(idx,1);
   else selectedSeatIds.push(seatId);
   renderSeatMap();
   updateSelectedSummary();
@@ -171,20 +208,15 @@ function toggleSeatSelection(seatId){
 
 function updateSelectedSummary(){
   const ul = document.getElementById('selected-seats');
-  const totalEl = document.getElementById('total-price');
+  const countEl = document.getElementById('sel-count');
   ul.innerHTML='';
-  let total = 0;
   selectedSeatIds.forEach(id => {
-    const seat = seats.find(s => s.id===id);
-    if(seat){
-      const li = document.createElement('li');
-      li.textContent = `${seat.id} — $${seat.price}`;
-      ul.appendChild(li);
-      total += seat.price;
-    }
+    const li = document.createElement('li');
+    li.textContent = id;
+    ul.appendChild(li);
   });
-  totalEl.textContent = `Total price: $${total}`;
-  document.getElementById('checkout-btn').disabled = selectedSeatIds.length===0;
+  countEl.textContent = String(selectedSeatIds.length);
+  document.getElementById('checkout-btn').disabled = selectedSeatIds.length === 0;
 }
 
 function updateAvailableCount(){
@@ -195,13 +227,7 @@ function updateAvailableCount(){
 
 function openCheckoutModal(){
   const summarySeats = document.getElementById('summary-seats');
-  const summaryPrice = document.getElementById('summary-price');
   summarySeats.textContent = `Seats: ${selectedSeatIds.join(', ')}`;
-  const total = selectedSeatIds.reduce((sum,id)=>{
-    const seat = seats.find(s=>s.id===id);
-    return sum + (seat?seat.price:0);
-  },0);
-  summaryPrice.textContent = `Total: $${total}`;
   const modal = document.getElementById('checkout-modal');
   modal.classList.remove('hidden');
   modal.setAttribute('aria-hidden','false');
@@ -218,7 +244,7 @@ async function confirmPurchase(){
     selectedSeatIds = [];
     await fetchSeats();
     updateSelectedSummary();
-    alert('Purchase successful! A receipt has been sent to your email.');
+    alert('Reservation successful! A confirmation email has been sent.');
   }catch(err){
     alert(err.message);
   }finally{
