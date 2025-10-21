@@ -1,29 +1,245 @@
-*{box-sizing:border-box;margin:0;padding:0;font-family:Arial,Helvetica,sans-serif}
-body{background:#f7f9fb;color:#1f2937;line-height:1.4}
-.site-header{padding:24px 16px;text-align:center;background:#111827;color:#fff}
-.site-header h1{font-size:28px;margin-bottom:8px}
-.site-main{display:grid;grid-template-columns:1fr 320px;gap:16px;max-width:1100px;margin:16px auto;padding:0 16px}
-.auth-container{max-width:420px;margin:24px auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:16px}
-.auth-section{margin-bottom:12px}
-.auth-section h2{font-size:18px;margin-bottom:8px}
-label{display:block;margin:8px 0 6px}
-input[type=email],input[type=text]{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:6px}
-.auth-actions{display:flex;gap:8px;margin-top:10px}
-.primary-btn,.secondary-btn{padding:10px 14px;border-radius:8px;border:none;cursor:pointer}
-.primary-btn{background:#2563eb;color:#fff}
-.primary-btn:disabled{opacity:.6;cursor:not-allowed}
-.secondary-btn{background:#e5e7eb;color:#374151}
-.auth-message{color:#b91c1c;margin-top:8px;min-height:20px}
-.hidden{display:none!important}
-.seat-map{display:grid;grid-template-columns:repeat(25,1fr);gap:6px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:12px;align-self:start}
-.seat{padding:8px 0;text-align:center;border:1px solid #d1d5db;border-radius:6px;user-select:none}
-.seat.available{background:#eff6ff;cursor:pointer}
-.seat.selected{outline:2px solid #2563eb}
-.seat.sold{background:#d1d5db;color:#6b7280;cursor:not-allowed}
-.seat.vip{background:#fff7ed;border-color:#fdba74}
-.summary{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:12px;height:fit-content}
-.selected-seats{list-style:none;margin:8px 0 12px}
-.modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center}
-.modal-content{background:#fff;padding:16px;border-radius:10px;min-width:320px;max-width:480px}
-.modal-actions{display:flex;gap:8px;margin-top:12px;justify-content:flex-end}
-.site-footer{text-align:center;color:#6b7280;font-size:12px;padding:24px 0}
+/* ===============  Globals & tokens  =============== */
+:root{
+  --bg: #f5f7fb;
+  --card: #ffffff;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --primary: #3b82f6;
+  --primary-contrast: #ffffff;
+  --border: #e5e7eb;
+
+  /* Seat sizing scales with screen, stays usable on mobile */
+  --seat-size: clamp(28px, 5.2vw, 44px);
+  --seat-gap: clamp(4px, 1.2vw, 8px);
+
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --shadow: 0 6px 24px rgba(0,0,0,0.06);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body{
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  color: var(--text);
+  background: var(--bg);
+}
+
+/* ===============  Page shell  =============== */
+.wrapper{
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: clamp(12px, 3vw, 24px);
+}
+
+.header{
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: clamp(10px, 2.5vw, 18px);
+}
+
+.header .brand{
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  font-size: clamp(18px, 2.2vw, 22px);
+}
+
+/* ===============  Responsive 2-column layout  =============== */
+.layout{
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: clamp(14px, 2.5vw, 24px);
+}
+
+/* Content area (seats) */
+.content{
+  min-width: 0; /* prevents grid overflow */
+}
+
+/* Sidebar (selection / auth) */
+.sidebar{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: clamp(14px, 2.2vw, 18px);
+  position: sticky;
+  top: 12px;
+  height: fit-content;
+}
+
+.sidebar h2{
+  margin: 0 0 8px 0;
+  font-size: clamp(18px, 2.3vw, 22px);
+}
+.sidebar .muted{ color: var(--muted); }
+
+/* Stack on tablets & phones */
+@media (max-width: 980px){
+  .layout{
+    grid-template-columns: 1fr;
+  }
+  .sidebar{
+    position: static;
+    order: 2;
+  }
+  .content{
+    order: 1;
+  }
+}
+
+/* ===============  Auth card  =============== */
+.auth-card{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: clamp(14px, 2.2vw, 18px);
+  max-width: 520px;
+  width: 100%;
+}
+
+.auth-card h3{
+  margin: 0 0 12px 0;
+  font-size: clamp(18px, 2.2vw, 22px);
+}
+.input{
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  font-size: 15px;
+}
+.btn-row{
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.btn{
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform .05s ease, opacity .2s ease;
+  font-size: 14px;
+}
+.btn:active{ transform: translateY(1px); }
+.btn.primary{ background: var(--primary); color: var(--primary-contrast); }
+.btn.ghost{ background: #eef2ff; color: #334155; }
+.error{ color: #b91c1c; margin-top: 10px; }
+
+/* On small screens, make buttons full width for easy taps */
+@media (max-width: 520px){
+  .btn-row{ flex-direction: column; }
+  .btn{ width: 100%; }
+}
+
+/* ===============  Seating grid  =============== */
+/* Support either #seats or .seats-grid containers */
+#seats, .seats-grid{
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: clamp(10px, 2vw, 16px);
+  overflow: auto; /* allow scroll if too wide */
+}
+
+/* If your markup is a flat 10x25 grid */
+#seats .grid, .seats-grid{
+  display: grid;
+  grid-auto-rows: var(--seat-size);
+  grid-template-columns: repeat(25, var(--seat-size));
+  gap: var(--seat-gap);
+  justify-content: start;
+}
+
+/* If your markup groups seats by row (A..J), keep rows stacked */
+.row{
+  display: grid;
+  grid-auto-rows: var(--seat-size);
+  grid-template-columns: repeat(25, var(--seat-size));
+  gap: var(--seat-gap);
+  margin-bottom: var(--seat-gap);
+}
+
+/* Seat buttons */
+.seat, [data-seat]{
+  width: var(--seat-size);
+  height: var(--seat-size);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #f8fafc;
+  display: inline-grid;
+  place-items: center;
+  font-size: clamp(11px, 1.8vw, 13px);
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s ease, transform .05s ease, box-shadow .15s ease;
+}
+.seat:hover, [data-seat]:hover{
+  background: #eef2ff;
+  box-shadow: 0 0 0 2px rgba(59,130,246,.15) inset;
+}
+.seat:active, [data-seat]:active{ transform: translateY(1px); }
+
+.seat.available, [data-seat][data-status="available"]{ background: #f8fafc; }
+.seat.selected, [data-seat].selected{ background: #93c5fd; color: #0b1b36; }
+.seat.sold, [data-seat][data-status="sold"]{
+  background: #e5e7eb; color: #6b7280; cursor: not-allowed; opacity: .7;
+}
+
+/* Labels row/legend */
+.legend{
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  margin: 8px 0 4px;
+}
+.legend .chip{
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: 999px; background: #f1f5f9; font-size: 12px;
+}
+.legend .dot{
+  width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--border);
+}
+.legend .dot.available{ background:#f8fafc; }
+.legend .dot.selected{ background:#93c5fd; }
+.legend .dot.sold{ background:#e5e7eb; }
+
+/* ===============  Sidebar cart / totals  =============== */
+.cart{
+  display: grid; gap: 10px;
+}
+.cart .line{ display: flex; justify-content: space-between; }
+.cart .total{
+  font-weight: 800; font-size: clamp(16px, 2.2vw, 20px);
+}
+.cart .checkout{
+  margin-top: 8px;
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--primary);
+  color: #fff;
+  border: 0; border-radius: 10px;
+  font-weight: 700; cursor: pointer;
+}
+
+/* ===============  Small screens polish  =============== */
+@media (max-width: 680px){
+  /* Let the seat grid scroll horizontally if 25 columns don’t fit */
+  #seats .grid, .seats-grid, .row{
+    justify-content: start;
+  }
+  /* Slightly smaller gaps to fit more seats */
+  :root{ --seat-gap: clamp(3px, 1vw, 6px); }
+}
+
+/* Ultra small phones */
+@media (max-width: 380px){
+  :root{ --seat-size: clamp(24px, 6.5vw, 40px); }
+}
