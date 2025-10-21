@@ -1,6 +1,4 @@
-// Backend for isaconcertticket.com — Fly.io bundle
-// Uses DATA_DIR=/data (volume) for users.json, seats.json, emails/
-// Exposes /api/* JSON endpoints and static file serving for '/' if needed.
+// Backend — free tickets, max 2 per email, extra registration fields, @uark staff rule
 
 const http = require('http');
 const fs = require('fs');
@@ -25,15 +23,14 @@ function writeJSON(file, obj){
 }
 
 function generateInitialSeats(){
-  const vipRows = ['A','B'];
+  // 10 rows (A..J) × 25 seats each = 250; all free now
   const seats = [];
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   for(let i=0;i<10;i++){
     const row = alphabet[i];
     for(let j=1;j<=25;j++){
       const id = `${row}${j}`;
-      const price = vipRows.includes(row) ? 100 : 50;
-      seats.push({id, row, number:j, price, status:'available'});
+      seats.push({ id, row, number: j, status: 'available' });
     }
   }
   return seats;
@@ -43,6 +40,7 @@ function generateInitialSeats(){
 if (!fs.existsSync(SEATS_FILE)) writeJSON(SEATS_FILE, generateInitialSeats());
 if (!fs.existsSync(USERS_FILE)) writeJSON(USERS_FILE, []);
 
+/** Utils */
 function sendJSON(res, code, obj){
   res.writeHead(code, {
     'Content-Type':'application/json; charset=utf-8',
@@ -52,38 +50,17 @@ function sendJSON(res, code, obj){
   });
   res.end(JSON.stringify(obj));
 }
-function sendApiNotFound(res){ sendJSON(res, 404, { error: 'Not found' }); }
-
-function serveStatic(req, res){
-  const url = req.url === '/' ? '/index.html' : req.url;
-  const filePath = path.join(__dirname, url.split('?')[0]);
-  if (!filePath.startsWith(__dirname)) return sendPlainNotFound(res);
-  fs.readFile(filePath, (err, data)=>{
-    if(err){ return sendPlainNotFound(res); }
-    const ext = path.extname(filePath).toLowerCase();
-    const type = ext==='.html'?'text/html; charset=utf-8'
-              : ext==='.css' ?'text/css; charset=utf-8'
-              : ext==='.js'  ?'application/javascript; charset=utf-8'
-              : 'application/octet-stream';
-    res.writeHead(200, {'Content-Type': type});
-    res.end(data);
-  });
+function sendText(res, code, text){
+  res.writeHead(code, { 'Content-Type':'text/plain; charset=utf-8' });
+  res.end(text);
 }
-function sendPlainNotFound(res){
-  res.writeHead(404, {'Content-Type':'text/plain; charset=utf-8'});
-  res.end('Not found');
-}
-
+function notFound(res){ sendJSON(res, 404, { error:'Not found' }); }
 function parseBody(req){
   return new Promise((resolve)=>{
-    let data='';
-    req.on('data', chunk=> data+=chunk);
-    req.on('end', ()=>{
-      try{ resolve(JSON.parse(data||'{}')); } catch{ resolve({}); }
-    });
+    let data=''; req.on('data', chunk=> data+=chunk);
+    req.on('end', ()=>{ try{ resolve(JSON.parse(data||'{}')); } catch{ resolve({}); } });
   });
 }
-
 async function sendEmail(to, subject, text){
   const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_SECURE } = process.env;
   const body = text + `\n\n(If you did not request this, ignore.)`;
@@ -100,6 +77,7 @@ async function sendEmail(to, subject, text){
   }
 }
 
+/** API handlers */
 async function handleAPI(req, res){
   if(req.method === 'OPTIONS'){
     return sendJSON(res, 204, { ok:true });
@@ -111,18 +89,48 @@ async function handleAPI(req, res){
     const seats = readJSON(SEATS_FILE, []);
     return sendJSON(res, 200, { seats });
   }
+
   if(req.method === 'POST' && req.url === '/api/register'){
-    const { email } = await parseBody(req);
+    const { email, first, last, phone, affiliation } = await parseBody(req);
     if(!email) return sendJSON(res, 400, { error:'Email required' });
+
+    // Staff must use @uark.edu email
+    if(String(affiliation||'').toLowerCase() === 'staff' && !/@uark\.edu$/i.test(email)){
+      return sendJSON(res, 400, { error:'Staff must register with a @uark.edu email address.' });
+    }
+
     const users = readJSON(USERS_FILE, []);
     let user = users.find(u=>u.email===email);
     const code = String(Math.floor(100000 + Math.random()*900000));
-    if(user){ user.code = code; }
-    else { user = { email, code, verified:false, purchases:[] }; users.push(user); }
+
+    if(user){
+      user.code = code;
+      // Update profile data if provided
+      user.first = first ?? user.first ?? '';
+      user.last = last ?? user.last ?? '';
+      user.phone = phone ?? user.phone ?? '';
+      user.affiliation = affiliation ?? user.affiliation ?? 'none';
+    } else {
+      user = {
+        email, code, verified:false,
+        first: first||'', last: last||'', phone: phone||'',
+        affiliation: affiliation||'none',
+        purchases: []
+      };
+      users.push(user);
+    }
     writeJSON(USERS_FILE, users);
-    await sendEmail(email, 'Your Verification Code', `Your verification code is: ${code}`);
+
+    try {
+      await sendEmail(email, 'Your Verification Code', `Your verification code is: ${code}`);
+    } catch (e) {
+      console.error('Email send failed:', e);
+      // Continue; user still can verify using the code saved on file
+    }
+
     return sendJSON(res, 200, { ok:true, message:'Verification code sent' });
   }
+
   if(req.method === 'POST' && req.url === '/api/verify'){
     const { email, code } = await parseBody(req);
     if(!email || !code) return sendJSON(res, 400, { error:'Email and code required' });
@@ -134,6 +142,7 @@ async function handleAPI(req, res){
     writeJSON(USERS_FILE, users);
     return sendJSON(res, 200, { ok:true, email });
   }
+
   if(req.method === 'POST' && req.url === '/api/login'){
     const { email } = await parseBody(req);
     if(!email) return sendJSON(res, 400, { error:'Email required' });
@@ -143,35 +152,75 @@ async function handleAPI(req, res){
     if(!user.verified) return sendJSON(res, 403, { error:'User not verified. Check your email for the code.' });
     return sendJSON(res, 200, { ok:true, email:user.email });
   }
+
   if(req.method === 'POST' && req.url === '/api/purchase'){
     const { email, seats: seatIds } = await parseBody(req);
-    if(!email || !Array.isArray(seatIds) || seatIds.length===0) return sendJSON(res, 400, { error:'Email and seats required' });
+    if(!email || !Array.isArray(seatIds) || seatIds.length===0){
+      return sendJSON(res, 400, { error:'Email and seats required' });
+    }
     const users = readJSON(USERS_FILE, []);
     const user = users.find(u=>u.email===email && u.verified);
     if(!user) return sendJSON(res, 403, { error:'User not verified or not found' });
+
+    // Enforce max 2 seats per email (total lifetime)
+    const already = Array.isArray(user.purchases)
+      ? user.purchases.reduce((sum,p)=> sum + (Array.isArray(p.seats)?p.seats.length:0), 0)
+      : 0;
+    const newTotal = already + seatIds.length;
+    if(newTotal > 2){
+      return sendJSON(res, 403, { error:`You can reserve up to 2 seats in total. You already have ${already}.` });
+    }
+
     const seats = readJSON(SEATS_FILE, []);
     const unavailable = [];
-    seatIds.forEach(id=>{
+    // Prevent duplicates in the same request
+    const uniqueRequested = [...new Set(seatIds)];
+
+    uniqueRequested.forEach(id=>{
       const s = seats.find(se=>se.id===id);
       if(!s || s.status!=='available') unavailable.push(id);
     });
-    if(unavailable.length>0) return sendJSON(res, 409, { error:`Seats unavailable: ${unavailable.join(', ')}` });
-    seatIds.forEach(id=>{
+    if(unavailable.length>0){
+      return sendJSON(res, 409, { error:`Seats unavailable: ${unavailable.join(', ')}` });
+    }
+
+    uniqueRequested.forEach(id=>{
       const s = seats.find(se=>se.id===id);
       if(s) s.status='sold';
     });
     writeJSON(SEATS_FILE, seats);
+
     if(!Array.isArray(user.purchases)) user.purchases = [];
-    user.purchases.push({ seats: seatIds, timestamp: Date.now() });
+    user.purchases.push({ seats: uniqueRequested, timestamp: Date.now() });
     writeJSON(USERS_FILE, users);
-    const total = seatIds.reduce((sum,id)=>{
-      const s = seats.find(se=>se.id===id);
-      return sum + (s ? s.price : 0);
-    },0);
-    await sendEmail(email, 'Your Concert Ticket Receipt', `Thanks for your purchase.\nSeats: ${seatIds.join(', ')}\nTotal: $${total}`);
+
+    try{
+      await sendEmail(email, 'Your Seat Reservation (Free)', `Thanks! Your seats are: ${uniqueRequested.join(', ')}\nCost: $0\nSee you at the concert!`);
+    }catch(e){
+      console.error('Email send failed:', e);
+    }
+
     return sendJSON(res, 200, { ok:true });
   }
-  return sendApiNotFound(res);
+
+  return notFound(res);
+}
+
+/** Static files (for local dev / simple hosting) */
+function serveStatic(req, res){
+  const url = req.url === '/' ? '/index.html' : req.url;
+  const filePath = path.join(__dirname, url.split('?')[0]);
+  if (!filePath.startsWith(__dirname)) return sendText(res, 404, 'Not found');
+  fs.readFile(filePath, (err, data)=>{
+    if(err){ return sendText(res, 404, 'Not found'); }
+    const ext = path.extname(filePath).toLowerCase();
+    const type = ext==='.html'?'text/html; charset=utf-8'
+              : ext==='.css' ?'text/css; charset=utf-8'
+              : ext==='.js'  ?'application/javascript; charset=utf-8'
+              : 'application/octet-stream';
+    res.writeHead(200, {'Content-Type': type});
+    res.end(data);
+  });
 }
 
 function requestHandler(req, res){
@@ -185,7 +234,7 @@ function requestHandler(req, res){
   }
 }
 
-const PORT = process.env.PORT || 8080; // Fly sets PORT
+const PORT = process.env.PORT || 3000;
 http.createServer(requestHandler).listen(PORT, ()=>{
   console.log(`Server listening on port ${PORT}`);
 });
