@@ -1,12 +1,4 @@
-// Splash: 2s
-window.addEventListener('load', ()=>{
-  setTimeout(()=>{
-    const s = document.getElementById('splash');
-    if(s){ s.style.display='none'; }
-  }, 2000); // 2 seconds
-});
-
-// ---- existing app code from previous update ----
+/* Netlify-ready frontend (free tickets, max 2 seats, strong validation) */
 let currentEmail = null;
 let seats = [];
 let selectedSeatIds = [];
@@ -54,25 +46,30 @@ function readAffil(){
 
 async function registerUser(){
   const email = document.getElementById('email-input').value.trim().toLowerCase();
-  const first = document.getElementById('first-input').value.trim();
-  const last  = document.getElementById('last-input').value.trim();
-  const phone = document.getElementById('phone-input').value.trim();
-  const affil = readAffil();
+  const first = document.getElementById('first-name').value.trim();
+  const last  = document.getElementById('last-name').value.trim();
+  const phone = document.getElementById('phone-number').value.trim();
+  const affiliation = readAffil();
   const msg = document.getElementById('auth-message');
   msg.textContent = "";
 
-  if(!email){ msg.textContent = "Please enter a valid email."; return; }
-  if(affil === 'staff' && !/@uark\.edu$/i.test(email)){
-    msg.textContent = "Staff must use a @uark.edu email address.";
+  if(!email || !first || !last || !phone || !affiliation){
+    msg.textContent = "Please fill all required fields.";
     return;
   }
+  if(['student','staff'].includes(affiliation) && !/@uark\.edu$/i.test(email)){
+    msg.textContent = "UofA students/staff must register with a @uark.edu email.";
+    return;
+  }
+
   try{
-    await jsonFetch(`${API_BASE}/register`, {
+    const data = await jsonFetch(`${API_BASE}/register`, {
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ email, first, last, phone, affiliation: affil })
+      body: JSON.stringify({ email, first, last, phone, affiliation })
     });
-    document.getElementById('verification-info').textContent = "A verification code has been sent to your email.";
+    // If backend ever returns a message, show it; otherwise proceed
+    document.getElementById('verification-info').textContent = data.message || "A verification code has been sent to your email.";
     showVerificationSection();
   }catch(err){
     msg.textContent = err.message;
@@ -119,7 +116,7 @@ function loginSuccess(email){
   document.getElementById('verification-section').classList.add('hidden');
   document.getElementById('sign-in-section').classList.add('hidden');
 
-  document.getElementById('seats-panel').classList.remove('hidden');
+  document.getElementById('seat-map').classList.remove('hidden');
   document.getElementById('summary').classList.remove('hidden');
   document.getElementById('available-count').classList.remove('hidden');
   document.getElementById('user-info').classList.remove('hidden');
@@ -137,22 +134,19 @@ function loginSuccess(email){
 function signOut(){
   currentEmail = null;
   if(seatRefreshInterval){ clearInterval(seatRefreshInterval); seatRefreshInterval = null; }
-
-  document.getElementById('seats-panel').classList.add('hidden');
+  document.getElementById('seat-map').classList.add('hidden');
   document.getElementById('summary').classList.add('hidden');
   document.getElementById('available-count').classList.add('hidden');
   document.getElementById('user-info').classList.add('hidden');
-
   document.getElementById('auth-container').classList.remove('hidden');
   document.getElementById('sign-in-section').classList.remove('hidden');
   document.getElementById('verification-section').classList.add('hidden');
-
   document.getElementById('auth-header-message').textContent = 'Register or log in to reserve your free seats (max 2).';
   document.getElementById('email-input').value = '';
   document.getElementById('code-input').value = '';
-  document.getElementById('first-input').value = '';
-  document.getElementById('last-input').value  = '';
-  document.getElementById('phone-input').value = '';
+  document.getElementById('first-name').value = '';
+  document.getElementById('last-name').value  = '';
+  document.getElementById('phone-number').value = '';
   selectedSeatIds = [];
   updateSelectedSummary();
 }
@@ -165,7 +159,7 @@ function showVerificationSection(){
 async function fetchSeats(){
   try{
     const data = await jsonFetch(`${API_BASE}/seats`);
-    seats = data.seats;
+    seats = data.seats || [];
     renderSeatMap();
     updateAvailableCount();
   }catch(err){
@@ -182,26 +176,30 @@ function renderSeatMap(){
     seatEl.classList.add('seat');
     seatEl.dataset.seatId = seat.id;
     seatEl.textContent = seat.id;
+
     if (seat.status === 'sold') seatEl.classList.add('sold');
+    else seatEl.classList.add('available');
+    if (['A','B'].includes(seat.row)) seatEl.classList.add('vip');
     if (selectedSeatIds.includes(seat.id)) seatEl.classList.add('selected');
 
     seatEl.addEventListener('click', () => {
       if (seat.status === 'sold') return;
-
-      // Max 2 seats selected on the client
       if (!selectedSeatIds.includes(seat.id) && selectedSeatIds.length >= 2) {
         alert('You can select at most 2 seats.');
         return;
       }
       toggleSeatSelection(seat.id);
     });
+
     seatMapEl.appendChild(seatEl);
   });
 }
 
 function toggleSeatSelection(seatId){
+  const seat = seats.find(s => s.id === seatId);
+  if(!seat || seat.status === 'sold') return;
   const idx = selectedSeatIds.indexOf(seatId);
-  if(idx >= 0) selectedSeatIds.splice(idx,1);
+  if(idx>=0) selectedSeatIds.splice(idx,1);
   else selectedSeatIds.push(seatId);
   renderSeatMap();
   updateSelectedSummary();
@@ -209,15 +207,13 @@ function toggleSeatSelection(seatId){
 
 function updateSelectedSummary(){
   const ul = document.getElementById('selected-seats');
-  const countEl = document.getElementById('sel-count');
   ul.innerHTML='';
   selectedSeatIds.forEach(id => {
     const li = document.createElement('li');
     li.textContent = id;
     ul.appendChild(li);
   });
-  countEl.textContent = String(selectedSeatIds.length);
-  document.getElementById('checkout-btn').disabled = selectedSeatIds.length === 0;
+  document.getElementById('checkout-btn').disabled = selectedSeatIds.length===0;
 }
 
 function updateAvailableCount(){
