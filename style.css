@@ -1,4 +1,3 @@
-/* Responsive UI — seats on left, summary on right; stacks on mobile */
 :root{
   --bg:#f5f7fb; --card:#fff; --text:#1f2937; --muted:#6b7280; --primary:#3b82f6; --border:#e5e7eb;
   --radius-lg:14px; --shadow:0 6px 24px rgba(0,0,0,.06);
@@ -9,9 +8,11 @@
 html,body{height:100%}
 body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color:var(--text);background:var(--bg)}
 
-/* Splash */
+/* 2s splash */
 #splash{
-  position:fixed;inset:0;background:#0b1220;display:grid;place-items:center;z-index:1000;animation:fadeOut 0.4s ease 3s forwards;
+  position:fixed; inset:0; background:#0b1220;
+  display:grid; place-items:center; z-index:1000;
+  animation: fadeOut 0.4s ease 2s forwards; /* 2 seconds */
 }
 #splash img{width:min(54vw,220px);height:auto;filter:drop-shadow(0 12px 30px rgba(0,0,0,.35))}
 @keyframes fadeOut{to{opacity:0;visibility:hidden}}
@@ -69,5 +70,4 @@ input[type=email],input[type=text]{width:100%;padding:10px 12px;border:1px solid
 .checkout{margin-top:8px;width:100%;padding:12px 14px;background:var(--primary);color:#fff;border:0;border-radius:10px;font-weight:700;cursor:pointer}
 
 .hidden{display:none!important}
-
 .site-footer{text-align:center;color:#6b7280;font-size:12px;padding:24px 0}

@@ -1,5 +1,12 @@
-// Frontend — free tickets, max 2 per email, responsive + splash
+// Splash: 2s
+window.addEventListener('load', ()=>{
+  setTimeout(()=>{
+    const s = document.getElementById('splash');
+    if(s){ s.style.display='none'; }
+  }, 2000); // 2 seconds
+});
 
+// ---- existing app code from previous update ----
 let currentEmail = null;
 let seats = [];
 let selectedSeatIds = [];
@@ -11,11 +18,6 @@ function getApiBase(){
   return window.location.origin.replace(/\/+$/,'') + '/api';
 }
 const API_BASE = getApiBase();
-
-// Splash hide (3s)
-window.addEventListener('load', ()=>{
-  setTimeout(()=>{ const s = document.getElementById('splash'); if(s){ s.style.display='none'; } }, 3000);
-});
 
 async function jsonFetch(url, options={}){
   const res = await fetch(url, options);
@@ -41,9 +43,9 @@ function init(){
   document.getElementById('verify-btn').addEventListener('click', verifyUser);
   document.getElementById('signout-btn').addEventListener('click', signOut);
   document.getElementById('checkout-btn').addEventListener('click', openCheckoutModal);
-
   attachModalHandlers();
 }
+document.addEventListener('DOMContentLoaded', init);
 
 function readAffil(){
   const el = document.querySelector('input[name="affil"]:checked');
@@ -113,7 +115,6 @@ async function loginUser(){
 
 function loginSuccess(email){
   currentEmail = email;
-
   document.getElementById('auth-container').classList.add('hidden');
   document.getElementById('verification-section').classList.add('hidden');
   document.getElementById('sign-in-section').classList.add('hidden');
@@ -187,7 +188,7 @@ function renderSeatMap(){
     seatEl.addEventListener('click', () => {
       if (seat.status === 'sold') return;
 
-      // Hard-limit to 2 seats selected
+      // Max 2 seats selected on the client
       if (!selectedSeatIds.includes(seat.id) && selectedSeatIds.length >= 2) {
         alert('You can select at most 2 seats.');
         return;
@@ -260,5 +261,3 @@ function attachModalHandlers(){
     modal.classList.add('hidden'); modal.setAttribute('aria-hidden','true');
   });
 }
-
-document.addEventListener('DOMContentLoaded', init);
