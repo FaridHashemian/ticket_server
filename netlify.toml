@@ -15,3 +15,14 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
+[build]
+  publish = "."  # adjust if your build outputs to a subfolder
+
+# Proxy all API calls from the main site to your API VM
+[[redirects]]
+  from = "/api/*"
+  to = "https://api.isaconcertticket.com/:splat"
+  status = 200
+  force = true
+  headers = { X-Proxy = "Netlify" }
