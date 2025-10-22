@@ -168,38 +168,43 @@ async function handleAPI(req, res){
   if(req.method==='GET' && req.url==='/api/seats')  return sendJSON(res, 200, { seats: loadSeats() });
 
   // PHONE LOGIN: send code
-  if(req.method==='POST' && req.url==='/api/login_phone'){
-    const { phone } = await parseBody(req);
-    const digits = String(phone||'').replace(/\D/g,'').slice(0,10);
-    if (digits.length !== 10) return sendJSON(res, 400, { error:'Invalid phone number' });
+  // PHONE LOGIN: send code via Twilio
+if (req.method==='POST' && req.url==='/api/login_phone'){
+  const { phone } = await parseBody(req);
+  const digits = String(phone||'').replace(/\D/g,'').slice(0,10);
+  if (digits.length !== 10) return sendJSON(res, 400, { error:'Invalid phone number' });
 
-    const users = readJSON(USERS_FILE, []);
-    let user = users.find(u=>u.phone===digits);
-    if(!user){ user = { phone: digits, verified:false, code:null, purchases:[] }; users.push(user); }
+  const users = readJSON(USERS_FILE, []);
+  let user = users.find(u=>u.phone===digits);
+  if(!user){ user = { phone: digits, verified:false, code:null, purchases:[] }; users.push(user); }
 
-    const code = String(Math.floor(100000 + Math.random()*900000));
-    user.code = code; writeJSON(USERS_FILE, users);
+  const code = String(Math.floor(100000 + Math.random()*900000));
+  user.code = code; writeJSON(USERS_FILE, users);
 
-    try{ await sendSMS(digits, `Your verification code is: ${code}`); }
-    catch(e){ console.error('SMS failed:', e?.message || e); }
+  try {
+    // requires TWILIO_SID, TWILIO_AUTH, TWILIO_FROM in environment
+    await sendSMS(digits, `Your verification code is: ${code}`);
+  } catch(e) { console.error('SMS failed:', e?.message || e); }
 
-    return sendJSON(res, 200, { ok:true, message:'Code sent via SMS' });
+  return sendJSON(res, 200, { ok:true, message:'Code sent via SMS' });
+}
+
+// PHONE VERIFY: check the code
+if (req.method==='POST' && req.url==='/api/verify_phone'){
+  const { phone, code } = await parseBody(req);
+  const digits = String(phone||'').replace(/\D/g,'').slice(0,10);
+  if (digits.length !== 10 || !/^\d{6}$/.test(String(code||''))) {
+    return sendJSON(res, 400, { error:'Invalid input' });
   }
 
-  // PHONE VERIFY
-  if(req.method==='POST' && req.url==='/api/verify_phone'){
-    const { phone, code } = await parseBody(req);
-    const digits = String(phone||'').replace(/\D/g,'').slice(0,10);
-    if (digits.length !== 10 || !/^\d{6}$/.test(String(code||''))) return sendJSON(res, 400, { error:'Invalid input' });
+  const users = readJSON(USERS_FILE, []);
+  const user = users.find(u=>u.phone===digits);
+  if(!user) return sendJSON(res, 404, { error:'User not found' });
+  if(user.code !== String(code)) return sendJSON(res, 400, { error:'Incorrect code' });
 
-    const users = readJSON(USERS_FILE, []);
-    const user = users.find(u=>u.phone===digits);
-    if(!user) return sendJSON(res, 404, { error:'User not found' });
-    if(user.code !== String(code)) return sendJSON(res, 400, { error:'Incorrect code' });
-
-    user.verified = true; user.code = null; writeJSON(USERS_FILE, users);
-    return sendJSON(res, 200, { ok:true, phone: digits });
-  }
+  user.verified = true; user.code = null; writeJSON(USERS_FILE, users);
+  return sendJSON(res, 200, { ok:true, phone: digits });
+}
 
   // PURCHASE (requires verified phone; takes receipt email + affiliation + guests)
   if(req.method==='POST' && req.url==='/api/purchase'){
