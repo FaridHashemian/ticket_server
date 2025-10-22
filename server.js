@@ -163,13 +163,17 @@ async function createReceiptPDF({ orderId, email, seats, guests, showTime, reser
 
 // ---------- API ----------
 async function handleAPI(req, res){
+  const { pathname } = new URL(req.url, 'http://localhost');
+  req._path = pathname; // stash normalized path for matching
+  // Optional: log every API call
+  console.log(new Date().toISOString(), req.method, req._path);
   if(req.method==='OPTIONS') return sendJSON(res, 204, { ok:true });
-  if(req.method==='GET' && req.url==='/api/health') return sendJSON(res, 200, { ok:true });
-  if(req.method==='GET' && req.url==='/api/seats')  return sendJSON(res, 200, { seats: loadSeats() });
-
+  if(req.method === 'GET'  && req._path === '/api/health') return sendJSON(res, 200, { ok:true });
+  if(req.method === 'GET'  && req._path === '/api/seats')  return sendJSON(res, 200, { seats: loadSeats() });
+  
   // PHONE LOGIN: send code
   // PHONE LOGIN: send code via Twilio
-if (req.method==='POST' && req.url==='/api/login_phone'){
+if (req.method === 'POST' && req._path === '/api/login_phone'){
   const { phone } = await parseBody(req);
   const digits = String(phone||'').replace(/\D/g,'').slice(0,10);
   if (digits.length !== 10) return sendJSON(res, 400, { error:'Invalid phone number' });
@@ -190,7 +194,7 @@ if (req.method==='POST' && req.url==='/api/login_phone'){
 }
 
 // PHONE VERIFY: check the code
-if (req.method==='POST' && req.url==='/api/verify_phone'){
+if (req.method === 'POST' && req._path === '/api/verify_phone'){
   const { phone, code } = await parseBody(req);
   const digits = String(phone||'').replace(/\D/g,'').slice(0,10);
   if (digits.length !== 10 || !/^\d{6}$/.test(String(code||''))) {
@@ -207,7 +211,7 @@ if (req.method==='POST' && req.url==='/api/verify_phone'){
 }
 
   // PURCHASE (requires verified phone; takes receipt email + affiliation + guests)
-  if(req.method==='POST' && req.url==='/api/purchase'){
+  if(req.method === 'POST' && req._path === '/api/purchase'){
     const { phone, email, affiliation, seats: seatIds, guests } = await parseBody(req);
     const digits = String(phone||'').replace(/\D/g,'').slice(0,10);
     if (digits.length !== 10) return sendJSON(res, 400, { error:'Invalid phone' });
