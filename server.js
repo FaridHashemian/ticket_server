@@ -17,9 +17,17 @@ try { PDFDocument  = require('pdfkit'); }     catch {}
 try { QRCode       = require('qrcode'); }     catch {}
 try {
   const twilio = require('twilio');
-  if (process.env.TWILIO_SID && process.env.TWILIO_AUTH) {
-    twilioClient = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH);
+let twilioClient = null;
+if (process.env.TWILIO_SID && process.env.TWILIO_AUTH) {
+  twilioClient = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH);
+}
+async function sendSMS(phone10, body){
+  if(!twilioClient || !process.env.TWILIO_FROM){
+    console.warn('Twilio not configured; SMS not sent.'); return;
   }
+  const to = `+1${phone10}`;
+  await twilioClient.messages.create({ from: process.env.TWILIO_FROM, to, body });
+}
 } catch {}
 
 const DATA_DIR     = process.env.DATA_DIR || __dirname;
@@ -162,61 +170,71 @@ async function createReceiptPDF({ orderId, email, seats, guests, showTime, reser
 }
 
 // ---------- API ----------
-async function handleAPI(req, res){
+async function handleAPI(req, res){  // Normalize the path; ignore query + trailing slashes
   const { pathname } = new URL(req.url, 'http://localhost');
-  req._path = pathname; // stash normalized path for matching
-  // Optional: log every API call
-  console.log(new Date().toISOString(), req.method, req._path);
-  if(req.method==='OPTIONS') return sendJSON(res, 204, { ok:true });
-  if(req.method === 'GET'  && req._path === '/api/health') return sendJSON(res, 200, { ok:true });
-  if(req.method === 'GET'  && req._path === '/api/seats')  return sendJSON(res, 200, { seats: loadSeats() });
-  
-  // PHONE LOGIN: send code
-  // PHONE LOGIN: send code via Twilio
-if (req.method === 'POST' && req._path === '/api/login_phone'){
-  const { phone } = await parseBody(req);
-  const digits = String(phone||'').replace(/\D/g,'').slice(0,10);
-  if (digits.length !== 10) return sendJSON(res, 400, { error:'Invalid phone number' });
+  const path = pathname.replace(/\/+$/, '') || '/';
+  console.log(new Date().toISOString(), req.method, path);
 
-  const users = readJSON(USERS_FILE, []);
-  let user = users.find(u=>u.phone===digits);
-  if(!user){ user = { phone: digits, verified:false, code:null, purchases:[] }; users.push(user); }
-
-  const code = String(Math.floor(100000 + Math.random()*900000));
-  user.code = code; writeJSON(USERS_FILE, users);
-
-  try {
-    // requires TWILIO_SID, TWILIO_AUTH, TWILIO_FROM in environment
-    await sendSMS(digits, `Your verification code is: ${code}`);
-  } catch(e) { console.error('SMS failed:', e?.message || e); }
-
-  return sendJSON(res, 200, { ok:true, message:'Code sent via SMS' });
-}
-
-// PHONE VERIFY: check the code
-if (req.method === 'POST' && req._path === '/api/verify_phone'){
-  const { phone, code } = await parseBody(req);
-  const digits = String(phone||'').replace(/\D/g,'').slice(0,10);
-  if (digits.length !== 10 || !/^\d{6}$/.test(String(code||''))) {
-    return sendJSON(res, 400, { error:'Invalid input' });
+  // CORS preflight
+  if (req.method === 'OPTIONS') {
+    return sendJSON(res, 204, { ok: true });
   }
 
-  const users = readJSON(USERS_FILE, []);
-  const user = users.find(u=>u.phone===digits);
-  if(!user) return sendJSON(res, 404, { error:'User not found' });
-  if(user.code !== String(code)) return sendJSON(res, 400, { error:'Incorrect code' });
+  // Health
+  if (req.method === 'GET' && path === '/api/health') {
+    return sendJSON(res, 200, { ok: true });
+  }
 
-  user.verified = true; user.code = null; writeJSON(USERS_FILE, users);
-  return sendJSON(res, 200, { ok:true, phone: digits });
-}
+  // Seats (strip price if present)
+  if (req.method === 'GET' && path === '/api/seats') {
+    const raw = loadSeats();
+    const seats = raw.map(({ id, row, number, status }) => ({ id, row, number, status }));
+    return sendJSON(res, 200, { seats });
+  }
+
+  // --- PHONE LOGIN: send code via Twilio ---
+  if (req.method === 'POST' && path === '/api/login_phone') {
+    const { phone } = await parseBody(req);
+    const digits = String(phone || '').replace(/\D/g, '').slice(0, 10);
+    if (digits.length !== 10) return sendJSON(res, 400, { error: 'Invalid phone number' });
+
+    const users = readJSON(USERS_FILE, []);
+    let user = users.find(u => u.phone === digits);
+    if (!user) { user = { phone: digits, verified: false, code: null, purchases: [] }; users.push(user); }
+
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    user.code = code; writeJSON(USERS_FILE, users);
+
+    try { await sendSMS(digits, `Your verification code is: ${code}`); }
+    catch (e) { console.error('SMS failed:', e?.message || e); }
+
+    return sendJSON(res, 200, { ok: true, message: 'Code sent via SMS' });
+  }
+
+  // --- PHONE VERIFY ---
+  if (req.method === 'POST' && path === '/api/verify_phone') {
+    const { phone, code } = await parseBody(req);
+    const digits = String(phone || '').replace(/\D/g, '').slice(0, 10);
+    if (digits.length !== 10 || !/^\d{6}$/.test(String(code || ''))) {
+      return sendJSON(res, 400, { error: 'Invalid input' });
+    }
+
+    const users = readJSON(USERS_FILE, []);
+    const user = users.find(u => u.phone === digits);
+    if (!user) return sendJSON(res, 404, { error: 'User not found' });
+    if (user.code !== String(code)) return sendJSON(res, 400, { error: 'Incorrect code' });
+
+    user.verified = true; user.code = null; writeJSON(USERS_FILE, users);
+    return sendJSON(res, 200, { ok: true, phone: digits });
+  }
 
   // PURCHASE (requires verified phone; takes receipt email + affiliation + guests)
-  if(req.method === 'POST' && req._path === '/api/purchase'){
+  if(req.method === 'POST' && path === '/api/purchase'){
     const { phone, email, affiliation, seats: seatIds, guests } = await parseBody(req);
     const digits = String(phone||'').replace(/\D/g,'').slice(0,10);
     if (digits.length !== 10) return sendJSON(res, 400, { error:'Invalid phone' });
     if(!Array.isArray(seatIds) || seatIds.length===0) return sendJSON(res, 400, { error:'Seats required' });
-
+    
     // validate receipt email
     const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email||''));
     if(!emailOk) return sendJSON(res, 400, { error:'Valid receipt email required' });
