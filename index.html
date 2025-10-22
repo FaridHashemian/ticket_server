@@ -5,12 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Concert Seat Registration (Free)</title>
 
-  <!-- Preload the splash GIF for instant display -->
+  <!-- Preload the splash GIF for instant display (optional) -->
   <link rel="preload" as="image" href="/logo.gif" />
 
   <link rel="stylesheet" href="style.css" />
-  <!-- Frontend calls https://isaconcertticket.com/api/... and Netlify proxies it -->
+  <!-- Frontend uses Netlify proxy to call https://isaconcertticket.com/api/... -->
   <meta name="api-base" content="https://isaconcertticket.com">
+
+  <!-- Client-side libs for PDF + QR -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head>
 <body>
   <!-- 2s splash (silent) -->
@@ -53,8 +57,8 @@
         <fieldset class="affil">
           <legend>University of Arkansas Affiliation <span class="required">*</span></legend>
           <label><input type="radio" name="affil" value="none" checked /> Neither</label>
-          <label><input type="radio" name="affil" value="student" /> Student (must use @uark.edu)</label>
-          <label><input type="radio" name="affil" value="staff" /> Staff/Faculty (must use @uark.edu)</label>
+          <label><input type="radio" name="affil" value="student" /> Student (must use @uark.edu or @uada.edu)</label>
+          <label><input type="radio" name="affil" value="staff" /> Staff/Faculty (must use @uark.edu or @uada.edu)</label>
         </fieldset>
 
         <div class="auth-actions">
@@ -76,16 +80,32 @@
       </div>
     </div>
 
-    <div id="seat-map" class="seat-map hidden"></div>
+    <div id="seat-area" class="hidden">
+      <div class="stage">STAGE</div>
+      <div id="seat-map" class="seat-map"></div>
+    </div>
 
     <aside id="summary" class="summary hidden">
       <h2>Your Selection</h2>
       <p class="muted">All tickets are free. You may reserve up to <strong>2 seats</strong> in total.</p>
       <ul id="selected-seats" class="selected-seats"></ul>
-      <button id="checkout-btn" class="primary-btn" disabled>Confirm Reservation</button>
+      <button id="checkout-btn" class="primary-btn" disabled>Continue</button>
     </aside>
   </main>
 
+  <!-- Step 2: Guest names -->
+  <div id="guest-modal" class="modal hidden" role="dialog" aria-hidden="true">
+    <div class="modal-content">
+      <h2>Guest Names</h2>
+      <div id="guest-names"></div>
+      <div class="modal-actions">
+        <button id="guest-next-btn" class="primary-btn">Next</button>
+        <button id="guest-cancel-btn" class="secondary-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 3: Confirm -->
   <div id="checkout-modal" class="modal hidden" role="dialog" aria-hidden="true">
     <div class="modal-content">
       <h2>Confirm Reservation</h2>

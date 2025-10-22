@@ -52,8 +52,15 @@ input[type=email],input[type=text]{width:100%;padding:10px;border:1px solid #d1d
 .auth-message{color:#b91c1c;margin-top:8px;min-height:20px}
 .hidden{display:none!important}
 
+/* Stage + map */
+#seat-area{margin:12px 0}
+.stage{
+  text-align:center; font-weight:700; letter-spacing:.2em;
+  background:#111827; color:#fff; padding:10px; border-radius:8px 8px 0 0;
+  border:1px solid #e5e7eb; border-bottom:none;
+}
 .seat-map{
-  display:grid;grid-template-columns:repeat(25,1fr);gap:6px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:12px;align-self:start
+  display:grid;grid-template-columns:repeat(25,1fr);gap:6px;background:#fff;border:1px solid #e5e7eb;border-radius:0 0 8px 8px;padding:12px;align-self:start
 }
 .seat{padding:8px 0;text-align:center;border:1px solid #d1d5db;border-radius:6px;user-select:none}
 .seat.available{background:#eff6ff;cursor:pointer}
@@ -65,7 +72,7 @@ input[type=email],input[type=text]{width:100%;padding:10px;border:1px solid #d1d
 .selected-seats{list-style:none;margin:8px 0 12px}
 
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center}
-.modal-content{background:#fff;padding:16px;border-radius:10px;min-width:320px;max-width:480px}
+.modal-content{background:#fff;padding:16px;border-radius:10px;min-width:320px;max-width:540px}
 .modal-actions{display:flex;gap:8px;margin-top:12px;justify-content:flex-end}
 
 .site-footer{text-align:center;color:#6b7280;font-size:12px;padding:24px 0}
