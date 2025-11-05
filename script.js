@@ -1,6 +1,6 @@
-// script.js — fixes IDs, adds (xxx) xxx-xxxx mask, wires Send/Verify with Firebase
+// script.js — Firebase phone auth + robust API calls with fallback
 
-// --- Firebase Web config (use the same one you created) ---
+// --- Firebase Web config (use your project values) ---
 const firebaseConfig = {
   apiKey:        "AIzaSyC8_5PgpJKAj8RslYPC8U3roGvSTGKvapQ",
   authDomain:    "ticketwebsite-4d214.firebaseapp.com",
@@ -9,8 +9,28 @@ const firebaseConfig = {
   messagingSenderId: "703462470857"
 };
 
-// API base for your backend
-const API_BASE = (document.querySelector('meta[name="api-base"]')?.content || window.location.origin) + '/api';
+// Resolve API base with failover: meta → same-origin
+function resolveApiBase() {
+  const meta = document.querySelector('meta[name="api-base"]')?.content || '';
+  const cleanMeta = meta && /^https?:\/\//i.test(meta) ? meta.replace(/\/+$/,'') : '';
+  const sameOrigin = window.location.origin.replace(/\/+$/,'');
+  return { primary: cleanMeta ? cleanMeta + '/api' : sameOrigin + '/api', fallback: sameOrigin + '/api' };
+}
+const API_URLS = resolveApiBase();
+
+// Generic fetch with fallback to same-origin if first attempt fails at network layer
+async function apiFetch(path, opts = {}) {
+  const url1 = `${API_URLS.primary}${path}`;
+  try {
+    const r1 = await fetch(url1, opts);
+    return r1;
+  } catch (e) {
+    // Network failure (DNS/SSL/CORS preflight blocked by infra) → try fallback
+    const url2 = `${API_URLS.fallback}${path}`;
+    try { return await fetch(url2, opts); }
+    catch (e2) { throw e2; }
+  }
+}
 
 // Initialize Firebase (compat)
 firebase.initializeApp(firebaseConfig);
@@ -58,28 +78,31 @@ async function verifyCode(codeRaw) {
   if (!conf) throw new Error('No code request pending. Tap “Send Code” again.');
   const code = String(codeRaw || '').trim();
   if (!/^\d{6}$/.test(code)) throw new Error('Enter the 6-digit code.');
+
+  // Confirm with Firebase (this part is client-side and should succeed if code is correct)
   await conf.confirm(code);
 
-  // (Optional) Notify your server so users.json stays in sync
+  // Now notify server so it marks phone "verified"
   const idToken = await getIdToken();
-  const res = await fetch(`${API_BASE}/verify_phone`, {
+  const res = await apiFetch('/verify_phone', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ idToken })
   });
   if (!res.ok) {
-    const j = await res.json().catch(() => ({}));
-    throw new Error(j.error || 'Verification failed on server.');
+    let j = {};
+    try { j = await res.json(); } catch {}
+    throw new Error(j.error || `Server verify failed (${res.status})`);
   }
   return true;
 }
 
-// Purchase seats (unchanged)
+// Purchase seats
 async function purchaseSeats({ seats, guests, email, affiliation }) {
   const idToken = await getIdToken();
   if (!idToken) throw new Error('Please verify your phone first.');
 
-  const res = await fetch(`${API_BASE}/purchase`, {
+  const res = await apiFetch('/purchase', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -114,10 +137,8 @@ window.addEventListener('DOMContentLoaded', () => {
     phoneInput.addEventListener('input', () => {
       const caretAtEnd = phoneInput.selectionStart === phoneInput.value.length;
       phoneInput.value = formatPhoneMask(phoneInput.value);
-      // keep caret at end for simplicity
       if (caretAtEnd) phoneInput.selectionStart = phoneInput.selectionEnd = phoneInput.value.length;
     });
-    // On paste, delay-apply mask
     phoneInput.addEventListener('paste', () => setTimeout(() => {
       phoneInput.value = formatPhoneMask(phoneInput.value);
     }, 0));
@@ -130,7 +151,6 @@ window.addEventListener('DOMContentLoaded', () => {
     try {
       await sendCode(phoneInput.value);
       verificationSection.classList.remove('hidden');
-      // move focus to code box
       codeInput?.focus();
       authMsg.textContent = 'Code sent. Please check your SMS.';
       authMsg.style.color = '#065f46';
@@ -150,21 +170,23 @@ window.addEventListener('DOMContentLoaded', () => {
       await verifyCode(codeInput.value);
       verifyMsg.textContent = 'Phone verified! You can now reserve seats.';
       verifyMsg.style.color = '#065f46';
-      // Optionally hide the sign-in section now:
       signInSection.classList.add('hidden');
     } catch (e) {
-      verifyMsg.textContent = e.message || 'Verification failed.';
+      // Show helpful network hint if fetch failed entirely
+      verifyMsg.textContent =
+        (e.message && /TypeError: Failed to fetch/i.test(String(e))) ? 
+          'Network error contacting the server. If your API is on a different domain, confirm the meta api-base URL or proxy /api on the same domain.' :
+          (e.message || 'Verification failed.');
       verifyMsg.style.color = '#b91c1c';
     } finally {
       verifyBtn.disabled = false;
     }
   });
 
-  // Example: you will already have seat selection + checkout wiring elsewhere
-  // Ensure your “Continue / Reserve” button calls purchaseSeats(...)
+  // You already have seat selection + checkout wiring elsewhere
 });
 
-// Example helpers your existing UI may already have:
+// Example helpers (keep if you use them)
 function collectSelectedSeatIds() {
   return Array.from(document.querySelectorAll('.seat.selected')).map(el => el.dataset.id);
 }

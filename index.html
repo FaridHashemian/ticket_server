@@ -7,12 +7,14 @@
 
   <link rel="preload" as="image" href="/logo.gif" />
   <link rel="stylesheet" href="style.css" />
+
+  <!-- If your API is on a separate domain, keep this HTTPS URL. 
+       If you proxy /api on the same domain, you may REMOVE this tag. -->
   <meta name="api-base" content="https://api.isaconcertticket.com">
 
-  <!-- Client libs only used for graceful fallback; main PDF is server-side now -->
+  <!-- Firebase (compat) must load before script.js -->
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
-  <script src="script.js"></script>
 </head>
 <body>
   <!-- 2s splash (silent) -->
@@ -111,6 +113,7 @@
     <p>&copy; 2025 Concert Organizer</p>
   </footer>
 
+  <!-- Load app last (only once) -->
   <script src="script.js"></script>
 </body>
 </html>

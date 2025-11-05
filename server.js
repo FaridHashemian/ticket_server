@@ -1,10 +1,9 @@
-// server.js — Google Firebase Phone Auth (web) + server token verify
+// server.js — Firebase Phone Auth token verify + seats + PDF (unchanged logic)
 
 const http = require('http');
 const fs   = require('fs');
 const path = require('path');
 
-/* Optional libs you already use */
 let nodemailer = null;
 let PDFDocument = null;
 let QRCode = null;
@@ -12,7 +11,6 @@ try { nodemailer  = require('nodemailer'); } catch {}
 try { PDFDocument = require('pdfkit'); }     catch {}
 try { QRCode      = require('qrcode'); }     catch {}
 
-/* ---------- Firebase Admin (verify ID tokens) ---------- */
 const admin = require('firebase-admin');
 (function initFirebase(){
   try {
@@ -27,7 +25,6 @@ const admin = require('firebase-admin');
   }
 })();
 
-/* ---------- Paths & Data ---------- */
 const DATA_DIR     = process.env.DATA_DIR || __dirname;
 const USERS_FILE   = path.join(DATA_DIR, 'users.json');
 const SEATS_FILE   = path.join(DATA_DIR, 'seats.json');
@@ -41,7 +38,6 @@ if (!fs.existsSync(RECEIPTS_DIR)) fs.mkdirSync(RECEIPTS_DIR, { recursive: true }
 function readJSON(file, fallback){ try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
 function writeJSON(file, obj){ fs.writeFileSync(file, JSON.stringify(obj, null, 2)); }
 
-/* ---------- Seats (auto-seed 250 free seats) ---------- */
 function generateInitialSeats(){
   const seats = []; const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   for(let i=0;i<10;i++){ const row = alphabet[i]; for(let j=1;j<=25;j++){ seats.push({ id:`${row}${j}`, row, number:j, status:'available' }); } }
@@ -55,7 +51,6 @@ function loadSeats(){
 if (!fs.existsSync(SEATS_FILE)) writeJSON(SEATS_FILE, generateInitialSeats());
 if (!fs.existsSync(USERS_FILE)) writeJSON(USERS_FILE, []);
 
-/* ---------- HTTP helpers ---------- */
 function sendJSON(res, code, obj){
   res.writeHead(code, {
     'Content-Type':'application/json; charset=utf-8',
@@ -87,7 +82,6 @@ function parseBody(req){
   return new Promise((resolve)=>{ let data=''; req.on('data', c=> data+=c); req.on('end', ()=>{ try{ resolve(JSON.parse(data||'{}')); }catch{ resolve({}); } }); });
 }
 
-/* ---------- Email (SMTP) ---------- */
 async function sendEmail(to, subject, text, attachments = []){
   const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_SECURE } = process.env;
   const body = text + `\n\n(If you did not request this, ignore.)`;
@@ -111,7 +105,6 @@ async function sendEmail(to, subject, text, attachments = []){
   fs.writeFileSync(fname, body + (attachLines?`\n\n${attachLines}\n`:''));
 }
 
-/* ---------- PDF (with QR) ---------- */
 async function createReceiptPDF({ orderId, email, seats, guests, showTime, reservationTime }){
   if (!PDFDocument || !QRCode) {
     const fallback = path.join(RECEIPTS_DIR, `ticket_receipt_${orderId}.txt`);
@@ -131,7 +124,7 @@ async function createReceiptPDF({ orderId, email, seats, guests, showTime, reser
   }
 
   const filePath = path.join(RECEIPTS_DIR, `ticket_receipt_${orderId}.pdf`);
-  const doc = new PDFDocument({ size:'A4', margin:50 });
+  const doc = new (require('pdfkit'))({ size:'A4', margin:50 });
   const stream = fs.createWriteStream(filePath); doc.pipe(stream);
 
   if (fs.existsSync(LOGO_PATH)) { try { doc.image(LOGO_PATH, 50, 50, { width: 80 }); } catch {} }
@@ -144,13 +137,13 @@ async function createReceiptPDF({ orderId, email, seats, guests, showTime, reser
 
   doc.moveTo(50, 160).lineTo(545, 160).strokeColor('#aaaaaa').stroke();
   doc.fontSize(13).fillColor('#000').text('Seats & Guests:', 50, 170);
-  doc.fontSize(11).fillColor('#000');
   let y = 190;
   const guestList = Array.isArray(guests)?guests:[];
   if (guestList.length){ guestList.forEach((g,i)=>{ doc.text(`${i+1}. ${g.name} — Seat ${g.seat}`, 60, y); y+=16; }); }
   else { doc.text(`Seats: ${seats.join(', ')}`, 60, y); y+=16; }
 
   try{
+    const QRCode = require('qrcode');
     const payload = JSON.stringify({ orderId, email, seats, ts: Date.now() });
     const qrBuffer = await QRCode.toBuffer(payload, { type:'png', margin:1, scale:6 });
     doc.image(qrBuffer, 450, 60, { fit:[100,100] });
@@ -163,22 +156,20 @@ async function createReceiptPDF({ orderId, email, seats, guests, showTime, reser
   return { filePath, mime:'application/pdf', filename: path.basename(filePath) };
 }
 
-/* ---------- Auth helpers (Firebase) ---------- */
 async function verifyIdTokenFromRequest(req){
-  const auth = req.headers['authorization'] || '';
-  const m = auth.match(/^Bearer\s+(.+)$/i);
+  const authz = req.headers['authorization'] || '';
+  const m = authz.match(/^Bearer\s+(.+)$/i);
   const token = m ? m[1] : null;
   if (!token) return null;
   try{
     const decoded = await admin.auth().verifyIdToken(token);
-    return decoded; // contains phone_number if verified via phone
+    return decoded;
   }catch(e){
     console.error('verifyIdToken error:', e?.message || e);
     return null;
   }
 }
 
-/* ---------- API ---------- */
 async function handleAPI(req, res){
   const { pathname } = new URL(req.url, 'http://localhost');
   const pathN = (pathname || '/').replace(/\/+$/, '') || '/';
@@ -186,46 +177,44 @@ async function handleAPI(req, res){
 
   if (req.method === 'OPTIONS') return sendJSON(res, 204, { ok: true });
 
-  // Health
   if (req.method === 'GET' && pathN === '/api/health') {
     return sendJSON(res, 200, { ok: true });
   }
 
-  // Seats (strip any 'price')
   if (req.method === 'GET' && pathN === '/api/seats') {
     const raw = loadSeats();
     const seats = raw.map(({ id, row, number, status }) => ({ id, row, number, status }));
     return sendJSON(res, 200, { seats });
   }
 
-  // Phone login (no-op with Firebase Web; we keep for backward compatibility)
   if (req.method === 'POST' && pathN === '/api/login_phone') {
     return sendJSON(res, 200, { ok:true, provider:'firebase', message:'Use client Firebase to send/verify code' });
   }
 
-  // Verify phone: accept Firebase ID token; mark user verified
   if (req.method === 'POST' && pathN === '/api/verify_phone') {
     const body = await parseBody(req);
     const idToken = body.idToken || null;
     if (!idToken) return sendJSON(res, 400, { error:'idToken required' });
 
-    let decoded = null;
-    try { decoded = await admin.auth().verifyIdToken(idToken); }
-    catch (e){ return sendJSON(res, 401, { error:'Invalid token' }); }
+    try {
+      const decoded = await admin.auth().verifyIdToken(idToken);
+      const phone = (decoded.phone_number || '').replace(/\D/g,'').slice(-10);
+      if (phone.length !== 10) return sendJSON(res, 400, { error:'No phone in token' });
 
-    const phone = (decoded.phone_number || '').replace(/\D/g,'').slice(-10);
-    if (phone.length !== 10) return sendJSON(res, 400, { error:'No phone in token' });
+      const users = readJSON(USERS_FILE, []);
+      let user = users.find(u=>u.phone===phone);
+      if(!user){ user = { phone, verified:true, purchases:[] }; users.push(user); }
+      else { user.verified = true; }
+      writeJSON(USERS_FILE, users);
 
-    const users = readJSON(USERS_FILE, []);
-    let user = users.find(u=>u.phone===phone);
-    if(!user){ user = { phone, verified:true, purchases:[] }; users.push(user); }
-    else { user.verified = true; }
-    writeJSON(USERS_FILE, users);
-
-    return sendJSON(res, 200, { ok:true, phone });
+      console.log('verify_phone OK for', phone);
+      return sendJSON(res, 200, { ok:true, phone });
+    } catch (e) {
+      console.error('verify_phone error:', e?.message || e);
+      return sendJSON(res, 401, { error:'Invalid token' });
+    }
   }
 
-  // Purchase: requires valid Firebase ID token (Authorization: Bearer <idToken>)
   if (req.method === 'POST' && pathN === '/api/purchase') {
     const decoded = await verifyIdTokenFromRequest(req);
     if (!decoded) return sendJSON(res, 401, { error:'Unauthorized' });
@@ -248,17 +237,13 @@ async function handleAPI(req, res){
     if(!user) return sendJSON(res, 403, { error:'Phone not verified' });
 
     const seats = loadSeats();
-
-    // max 2 seats/phone across all time
     const already = Array.isArray(user.purchases) ? user.purchases.reduce((n,p)=> n + (Array.isArray(p.seats)?p.seats.length:0), 0) : 0;
     if (already + seatIds.length > 2) return sendJSON(res, 400, { error:`Seat limit exceeded. You already reserved ${already} seat(s). Max is 2.` });
 
-    // availability
     const bad = [];
     seatIds.forEach(id=>{ const s=seats.find(se=>se.id===id); if(!s || s.status!=='available') bad.push(id); });
     if (bad.length) return sendJSON(res, 409, { error:`Seats unavailable: ${bad.join(', ')}` });
 
-    // reserve
     seatIds.forEach(id=>{ const s=seats.find(se=>se.id===id); if(s) s.status='sold'; });
     writeJSON(SEATS_FILE, seats);
 
