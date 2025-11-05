@@ -1,6 +1,6 @@
-// script.js — Firebase Phone Auth on the client; call server with ID token
+// script.js — fixes IDs, adds (xxx) xxx-xxxx mask, wires Send/Verify with Firebase
 
-// TODO: replace with your Firebase web config from console
+// --- Firebase Web config (use the same one you created) ---
 const firebaseConfig = {
   apiKey:        "AIzaSyC8_5PgpJKAj8RslYPC8U3roGvSTGKvapQ",
   authDomain:    "ticketwebsite-4d214.firebaseapp.com",
@@ -9,114 +9,168 @@ const firebaseConfig = {
   messagingSenderId: "703462470857"
 };
 
-// API base
+// API base for your backend
 const API_BASE = (document.querySelector('meta[name="api-base"]')?.content || window.location.origin) + '/api';
 
-// Load Firebase (modular) via global scripts in index.html
-// We expect global "firebase" object (v9 compat style) for simplicity here.
+// Initialize Firebase (compat)
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 
-// Keep token handy
-async function getIdToken(){
+// --- Helpers ---
+async function getIdToken() {
   const user = auth.currentUser;
-  if(!user) return null;
-  return await user.getIdToken(/* forceRefresh */ true);
+  if (!user) return null;
+  return await user.getIdToken(true);
+}
+
+// phone input mask → (xxx) xxx-xxxx
+function formatPhoneMask(raw) {
+  const d = String(raw || '').replace(/\D/g, '').slice(0, 10);
+  const a = d.slice(0, 3);
+  const b = d.slice(3, 6);
+  const c = d.slice(6, 10);
+  if (d.length > 6) return `(${a}) ${b}-${c}`;
+  if (d.length > 3) return `(${a}) ${b}`;
+  if (d.length > 0) return `(${a}`;
+  return '';
 }
 
 // reCAPTCHA
 let recaptchaVerifier = null;
-function setupRecaptcha(containerId='recaptcha-container'){
+function setupRecaptcha(containerId = 'recaptcha-container') {
   recaptchaVerifier = new firebase.auth.RecaptchaVerifier(containerId, { size: 'invisible' });
   recaptchaVerifier.render();
 }
 
-// Send SMS
-async function sendCode(phoneRaw){
-  const digits = String(phoneRaw||'').replace(/\D/g,'').slice(-10);
-  if (digits.length !== 10) throw new Error('Invalid phone number');
+// Send SMS via Firebase
+async function sendCode(phoneRaw) {
+  const digits = String(phoneRaw || '').replace(/\D/g, '').slice(0, 10);
+  if (digits.length !== 10) throw new Error('Please enter a valid 10-digit US number.');
   const full = `+1${digits}`;
   const confirmation = await auth.signInWithPhoneNumber(full, recaptchaVerifier);
-  // store confirmation for later verification
   window._confirmationResult = confirmation;
   return true;
 }
 
-// Verify code
-async function verifyCode(code){
+// Verify the 6-digit code
+async function verifyCode(codeRaw) {
   const conf = window._confirmationResult;
-  if(!conf) throw new Error('No pending confirmation');
-  await conf.confirm(String(code||'').trim());
+  if (!conf) throw new Error('No code request pending. Tap “Send Code” again.');
+  const code = String(codeRaw || '').trim();
+  if (!/^\d{6}$/.test(code)) throw new Error('Enter the 6-digit code.');
+  await conf.confirm(code);
+
+  // (Optional) Notify your server so users.json stays in sync
   const idToken = await getIdToken();
-  // Tell server "this phone is verified" (optional; useful to keep users.json in sync)
   const res = await fetch(`${API_BASE}/verify_phone`, {
-    method:'POST',
-    headers:{ 'Content-Type':'application/json' },
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ idToken })
   });
-  if(!res.ok){ const j=await res.json().catch(()=>({})); throw new Error(j.error||'verify_phone failed'); }
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.error || 'Verification failed on server.');
+  }
   return true;
 }
 
-// Purchase seats
-async function purchaseSeats({ seats, guests, email, affiliation }){
+// Purchase seats (unchanged)
+async function purchaseSeats({ seats, guests, email, affiliation }) {
   const idToken = await getIdToken();
-  if(!idToken) throw new Error('Please login via phone first');
+  if (!idToken) throw new Error('Please verify your phone first.');
+
   const res = await fetch(`${API_BASE}/purchase`, {
-    method:'POST',
-    headers:{ 'Content-Type':'application/json', 'Authorization': `Bearer ${idToken}` },
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${idToken}`
+    },
     body: JSON.stringify({ seats, guests, email, affiliation })
   });
-  const j = await res.json().catch(()=>({}));
-  if(!res.ok) throw new Error(j.error||'Purchase failed');
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.error || 'Purchase failed');
   return j;
 }
 
-// ------- Hook to your UI -------
-// Example wiring (adapt to your actual elements)
-window.addEventListener('DOMContentLoaded', ()=>{
+// ----- Wire up to your current DOM -----
+window.addEventListener('DOMContentLoaded', () => {
   setupRecaptcha('recaptcha-container');
 
-  const phoneInput  = document.querySelector('#phone');
-  const sendBtn     = document.querySelector('#send-code');
-  const codeInput   = document.querySelector('#code');
-  const verifyBtn   = document.querySelector('#verify-code');
+  // Elements (match your index.html IDs)
+  const phoneInput   = document.querySelector('#phone-input');
+  const sendBtn      = document.querySelector('#login-phone-btn');
+  const authMsg      = document.querySelector('#auth-message');
 
-  sendBtn?.addEventListener('click', async ()=>{
-    try{
+  const codeInput    = document.querySelector('#code-input');
+  const verifyBtn    = document.querySelector('#verify-phone-btn');
+  const verifyMsg    = document.querySelector('#verification-message');
+
+  const signInSection    = document.querySelector('#sign-in-section');
+  const verificationSection = document.querySelector('#verification-section');
+
+  // Mask while typing
+  if (phoneInput) {
+    phoneInput.setAttribute('maxlength', '14'); // "(xxx) xxx-xxxx"
+    phoneInput.addEventListener('input', () => {
+      const caretAtEnd = phoneInput.selectionStart === phoneInput.value.length;
+      phoneInput.value = formatPhoneMask(phoneInput.value);
+      // keep caret at end for simplicity
+      if (caretAtEnd) phoneInput.selectionStart = phoneInput.selectionEnd = phoneInput.value.length;
+    });
+    // On paste, delay-apply mask
+    phoneInput.addEventListener('paste', () => setTimeout(() => {
+      phoneInput.value = formatPhoneMask(phoneInput.value);
+    }, 0));
+  }
+
+  // Send Code
+  sendBtn?.addEventListener('click', async () => {
+    authMsg.textContent = '';
+    sendBtn.disabled = true;
+    try {
       await sendCode(phoneInput.value);
-      alert('Code sent. Please check your SMS.');
-    }catch(e){ alert(e.message||e); }
+      verificationSection.classList.remove('hidden');
+      // move focus to code box
+      codeInput?.focus();
+      authMsg.textContent = 'Code sent. Please check your SMS.';
+      authMsg.style.color = '#065f46';
+    } catch (e) {
+      authMsg.textContent = e.message || 'Failed to send code.';
+      authMsg.style.color = '#b91c1c';
+    } finally {
+      sendBtn.disabled = false;
+    }
   });
 
-  verifyBtn?.addEventListener('click', async ()=>{
-    try{
+  // Verify Code
+  verifyBtn?.addEventListener('click', async () => {
+    verifyMsg.textContent = '';
+    verifyBtn.disabled = true;
+    try {
       await verifyCode(codeInput.value);
-      alert('Phone verified! You can now reserve seats.');
-    }catch(e){ alert(e.message||e); }
+      verifyMsg.textContent = 'Phone verified! You can now reserve seats.';
+      verifyMsg.style.color = '#065f46';
+      // Optionally hide the sign-in section now:
+      signInSection.classList.add('hidden');
+    } catch (e) {
+      verifyMsg.textContent = e.message || 'Verification failed.';
+      verifyMsg.style.color = '#b91c1c';
+    } finally {
+      verifyBtn.disabled = false;
+    }
   });
 
-  // When user clicks "Reserve":
-  const reserveBtn = document.querySelector('#reserve');
-  reserveBtn?.addEventListener('click', async ()=>{
-    try{
-      // gather seats, guests, email, affiliation from your form
-      const seats = collectSelectedSeatIds();    // implement in your UI
-      const guests = collectGuestNamesWithSeats(); // implement in your UI
-      const email = document.querySelector('#receiptEmail').value.trim();
-      const affiliation = document.querySelector('input[name="aff"]:checked')?.value || 'none';
-
-      const out = await purchaseSeats({ seats, guests, email, affiliation });
-      alert(`Reservation complete! Order ${out.orderId}. Check your email for the PDF.`);
-    }catch(e){ alert(e.message||e); }
-  });
+  // Example: you will already have seat selection + checkout wiring elsewhere
+  // Ensure your “Continue / Reserve” button calls purchaseSeats(...)
 });
 
-// Dummy helpers to illustrate; replace with your actual app logic
-function collectSelectedSeatIds(){ return Array.from(document.querySelectorAll('.seat.selected')).map(el=>el.dataset.id); }
-function collectGuestNamesWithSeats(){
-  // produce [{name:'Alice', seat:'A1'}, ...] based on your modal / input UX
-  return Array.from(document.querySelectorAll('.guest-row')).map(row=>{
-    return { name: row.querySelector('.guest-name').value.trim(), seat: row.querySelector('.guest-seat').textContent.trim() };
-  });
+// Example helpers your existing UI may already have:
+function collectSelectedSeatIds() {
+  return Array.from(document.querySelectorAll('.seat.selected')).map(el => el.dataset.id);
+}
+function collectGuestNamesWithSeats() {
+  return Array.from(document.querySelectorAll('.guest-row')).map(row => ({
+    name: row.querySelector('.guest-name').value.trim(),
+    seat: row.querySelector('.guest-seat').textContent.trim()
+  }));
 }
