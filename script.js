@@ -1,6 +1,6 @@
-// script.js — Firebase phone auth + robust API calls with fallback
+// script.js — Firebase phone auth + robust API calls with 5xx fallback
 
-// --- Firebase Web config (use your project values) ---
+// --- Firebase Web config (your project) ---
 const firebaseConfig = {
   apiKey:        "AIzaSyC8_5PgpJKAj8RslYPC8U3roGvSTGKvapQ",
   authDomain:    "ticketwebsite-4d214.firebaseapp.com",
@@ -18,21 +18,27 @@ function resolveApiBase() {
 }
 const API_URLS = resolveApiBase();
 
-// Generic fetch with fallback to same-origin if first attempt fails at network layer
+// Generic fetch with fallback to same-origin if:
+//  - network error, OR
+//  - 5xx from the API domain (502/503/504/521/522)
 async function apiFetch(path, opts = {}) {
   const url1 = `${API_URLS.primary}${path}`;
   try {
     const r1 = await fetch(url1, opts);
+    if ([502,503,504,521,522].includes(r1.status) && API_URLS.primary !== API_URLS.fallback) {
+      const url2 = `${API_URLS.fallback}${path}`;
+      try { return await fetch(url2, opts); } catch { /* fall through */ }
+    }
     return r1;
   } catch (e) {
-    // Network failure (DNS/SSL/CORS preflight blocked by infra) → try fallback
+    // Network failure → try fallback
     const url2 = `${API_URLS.fallback}${path}`;
-    try { return await fetch(url2, opts); }
-    catch (e2) { throw e2; }
+    if (API_URLS.primary !== API_URLS.fallback) return fetch(url2, opts);
+    throw e;
   }
 }
 
-// Initialize Firebase (compat)
+// Initialize Firebase
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 
@@ -79,25 +85,28 @@ async function verifyCode(codeRaw) {
   const code = String(codeRaw || '').trim();
   if (!/^\d{6}$/.test(code)) throw new Error('Enter the 6-digit code.');
 
-  // Confirm with Firebase (this part is client-side and should succeed if code is correct)
+  // Confirm with Firebase (client-side)
   await conf.confirm(code);
 
-  // Now notify server so it marks phone "verified"
+  // Notify server so it marks phone "verified"
   const idToken = await getIdToken();
   const res = await apiFetch('/verify_phone', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ idToken })
   });
+
   if (!res.ok) {
     let j = {};
     try { j = await res.json(); } catch {}
-    throw new Error(j.error || `Server verify failed (${res.status})`);
+    // Show 5xx number if present
+    const statusInfo = res.status ? ` (${res.status})` : '';
+    throw new Error(j.error || `Server verify failed${statusInfo}`);
   }
   return true;
 }
 
-// Purchase seats
+// Purchase seats (unchanged)
 async function purchaseSeats({ seats, guests, email, affiliation }) {
   const idToken = await getIdToken();
   if (!idToken) throw new Error('Please verify your phone first.');
@@ -115,11 +124,10 @@ async function purchaseSeats({ seats, guests, email, affiliation }) {
   return j;
 }
 
-// ----- Wire up to your current DOM -----
+// ----- Wire up to DOM -----
 window.addEventListener('DOMContentLoaded', () => {
   setupRecaptcha('recaptcha-container');
 
-  // Elements (match your index.html IDs)
   const phoneInput   = document.querySelector('#phone-input');
   const sendBtn      = document.querySelector('#login-phone-btn');
   const authMsg      = document.querySelector('#auth-message');
@@ -172,27 +180,14 @@ window.addEventListener('DOMContentLoaded', () => {
       verifyMsg.style.color = '#065f46';
       signInSection.classList.add('hidden');
     } catch (e) {
-      // Show helpful network hint if fetch failed entirely
       verifyMsg.textContent =
         (e.message && /TypeError: Failed to fetch/i.test(String(e))) ? 
           'Network error contacting the server. If your API is on a different domain, confirm the meta api-base URL or proxy /api on the same domain.' :
           (e.message || 'Verification failed.');
       verifyMsg.style.color = '#b91c1c';
+      console.error('verify error:', e);
     } finally {
       verifyBtn.disabled = false;
     }
   });
-
-  // You already have seat selection + checkout wiring elsewhere
 });
-
-// Example helpers (keep if you use them)
-function collectSelectedSeatIds() {
-  return Array.from(document.querySelectorAll('.seat.selected')).map(el => el.dataset.id);
-}
-function collectGuestNamesWithSeats() {
-  return Array.from(document.querySelectorAll('.guest-row')).map(row => ({
-    name: row.querySelector('.guest-name').value.trim(),
-    seat: row.querySelector('.guest-seat').textContent.trim()
-  }));
-}
