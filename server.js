@@ -1,37 +1,35 @@
-// Phone-based auth (Twilio), free tickets, 2 seats per phone,
-// collects receipt email + affiliation at purchase,
-// server-side PDF (pdfkit + qrcode) is attached to the email.
-// Keeps auto-seed seats, single color is a CSS concern.
+// server.js — Google Firebase Phone Auth (web) + server token verify
 
 const http = require('http');
 const fs   = require('fs');
 const path = require('path');
 
+/* Optional libs you already use */
 let nodemailer = null;
 let PDFDocument = null;
 let QRCode = null;
-let twilioClient = null;
+try { nodemailer  = require('nodemailer'); } catch {}
+try { PDFDocument = require('pdfkit'); }     catch {}
+try { QRCode      = require('qrcode'); }     catch {}
 
-try { nodemailer   = require('nodemailer'); } catch {}
-try { PDFDocument  = require('pdfkit'); }     catch {}
-try { QRCode       = require('qrcode'); }     catch {}
-try {
-  const twilio = require('twilio');
-let twilioClient = null;
-if (process.env.TWILIO_SID && process.env.TWILIO_AUTH) {
-  twilioClient = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH);
-}
-async function sendSMS(phone10, body){
-  if(!twilioClient || !process.env.TWILIO_FROM){
-    console.warn('Twilio not configured; SMS not sent.'); return;
+/* ---------- Firebase Admin (verify ID tokens) ---------- */
+const admin = require('firebase-admin');
+(function initFirebase(){
+  try {
+    const saPath = process.env.FIREBASE_SA_PATH || path.join(__dirname, 'firebase-service-account.json');
+    const serviceAccount = JSON.parse(fs.readFileSync(saPath, 'utf8'));
+    if (!admin.apps.length) {
+      admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+      console.log('Firebase Admin initialized');
+    }
+  } catch (e) {
+    console.error('Firebase Admin init failed:', e?.message || e);
   }
-  const to = `+1${phone10}`;
-  await twilioClient.messages.create({ from: process.env.TWILIO_FROM, to, body });
-}
-} catch {}
+})();
 
+/* ---------- Paths & Data ---------- */
 const DATA_DIR     = process.env.DATA_DIR || __dirname;
-const USERS_FILE   = path.join(DATA_DIR, 'users.json');   // stores users by phone now
+const USERS_FILE   = path.join(DATA_DIR, 'users.json');
 const SEATS_FILE   = path.join(DATA_DIR, 'seats.json');
 const EMAILS_DIR   = path.join(DATA_DIR, 'emails');
 const RECEIPTS_DIR = path.join(DATA_DIR, 'receipts');
@@ -43,6 +41,7 @@ if (!fs.existsSync(RECEIPTS_DIR)) fs.mkdirSync(RECEIPTS_DIR, { recursive: true }
 function readJSON(file, fallback){ try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
 function writeJSON(file, obj){ fs.writeFileSync(file, JSON.stringify(obj, null, 2)); }
 
+/* ---------- Seats (auto-seed 250 free seats) ---------- */
 function generateInitialSeats(){
   const seats = []; const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   for(let i=0;i<10;i++){ const row = alphabet[i]; for(let j=1;j<=25;j++){ seats.push({ id:`${row}${j}`, row, number:j, status:'available' }); } }
@@ -56,17 +55,18 @@ function loadSeats(){
 if (!fs.existsSync(SEATS_FILE)) writeJSON(SEATS_FILE, generateInitialSeats());
 if (!fs.existsSync(USERS_FILE)) writeJSON(USERS_FILE, []);
 
-// CORS/JSON helpers
+/* ---------- HTTP helpers ---------- */
 function sendJSON(res, code, obj){
   res.writeHead(code, {
     'Content-Type':'application/json; charset=utf-8',
     'Access-Control-Allow-Origin':'*',
     'Access-Control-Allow-Methods':'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers':'Content-Type'
+    'Access-Control-Allow-Headers':'Content-Type,Authorization'
   });
   res.end(JSON.stringify(obj));
 }
 function sendApiNotFound(res){ sendJSON(res, 404, { error:'Not found' }); }
+function sendPlainNotFound(res){ res.writeHead(404, {'Content-Type':'text/plain; charset=utf-8'}); res.end('Not found'); }
 function serveStatic(req,res){
   const url = req.url === '/' ? '/index.html' : req.url;
   const filePath = path.join(__dirname, url.split('?')[0]);
@@ -78,22 +78,16 @@ function serveStatic(req,res){
               : ext==='.css' ?'text/css; charset=utf-8'
               : ext==='.js'  ?'application/javascript; charset=utf-8'
               : ext==='.png' ?'image/png'
+              : ext==='.gif' ?'image/gif'
               : 'application/octet-stream';
     res.writeHead(200, {'Content-Type': type}); res.end(data);
   });
 }
-function sendPlainNotFound(res){ res.writeHead(404, {'Content-Type':'text/plain; charset=utf-8'}); res.end('Not found'); }
 function parseBody(req){
   return new Promise((resolve)=>{ let data=''; req.on('data', c=> data+=c); req.on('end', ()=>{ try{ resolve(JSON.parse(data||'{}')); }catch{ resolve({}); } }); });
 }
 
-// ---------- SMS + Email ----------
-async function sendSMS(phone10, body){
-  if(!twilioClient || !process.env.TWILIO_FROM){ console.warn('Twilio not configured; SMS not sent.'); return; }
-  const to = `+1${phone10}`;
-  await twilioClient.messages.create({ from: process.env.TWILIO_FROM, to, body });
-}
-
+/* ---------- Email (SMTP) ---------- */
 async function sendEmail(to, subject, text, attachments = []){
   const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_SECURE } = process.env;
   const body = text + `\n\n(If you did not request this, ignore.)`;
@@ -117,7 +111,7 @@ async function sendEmail(to, subject, text, attachments = []){
   fs.writeFileSync(fname, body + (attachLines?`\n\n${attachLines}\n`:''));
 }
 
-// ---------- PDF ----------
+/* ---------- PDF (with QR) ---------- */
 async function createReceiptPDF({ orderId, email, seats, guests, showTime, reservationTime }){
   if (!PDFDocument || !QRCode) {
     const fallback = path.join(RECEIPTS_DIR, `ticket_receipt_${orderId}.txt`);
@@ -169,73 +163,79 @@ async function createReceiptPDF({ orderId, email, seats, guests, showTime, reser
   return { filePath, mime:'application/pdf', filename: path.basename(filePath) };
 }
 
-// ---------- API ----------
-async function handleAPI(req, res){  // Normalize the path; ignore query + trailing slashes
-  const { pathname } = new URL(req.url, 'http://localhost');
-  const path = pathname.replace(/\/+$/, '') || '/';
-  console.log(new Date().toISOString(), req.method, path);
-
-  // CORS preflight
-  if (req.method === 'OPTIONS') {
-    return sendJSON(res, 204, { ok: true });
+/* ---------- Auth helpers (Firebase) ---------- */
+async function verifyIdTokenFromRequest(req){
+  const auth = req.headers['authorization'] || '';
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  const token = m ? m[1] : null;
+  if (!token) return null;
+  try{
+    const decoded = await admin.auth().verifyIdToken(token);
+    return decoded; // contains phone_number if verified via phone
+  }catch(e){
+    console.error('verifyIdToken error:', e?.message || e);
+    return null;
   }
+}
+
+/* ---------- API ---------- */
+async function handleAPI(req, res){
+  const { pathname } = new URL(req.url, 'http://localhost');
+  const pathN = (pathname || '/').replace(/\/+$/, '') || '/';
+  console.log(new Date().toISOString(), req.method, pathN);
+
+  if (req.method === 'OPTIONS') return sendJSON(res, 204, { ok: true });
 
   // Health
-  if (req.method === 'GET' && path === '/api/health') {
+  if (req.method === 'GET' && pathN === '/api/health') {
     return sendJSON(res, 200, { ok: true });
   }
 
-  // Seats (strip price if present)
-  if (req.method === 'GET' && path === '/api/seats') {
+  // Seats (strip any 'price')
+  if (req.method === 'GET' && pathN === '/api/seats') {
     const raw = loadSeats();
     const seats = raw.map(({ id, row, number, status }) => ({ id, row, number, status }));
     return sendJSON(res, 200, { seats });
   }
 
-  // --- PHONE LOGIN: send code via Twilio ---
-  if (req.method === 'POST' && path === '/api/login_phone') {
-    const { phone } = await parseBody(req);
-    const digits = String(phone || '').replace(/\D/g, '').slice(0, 10);
-    if (digits.length !== 10) return sendJSON(res, 400, { error: 'Invalid phone number' });
-
-    const users = readJSON(USERS_FILE, []);
-    let user = users.find(u => u.phone === digits);
-    if (!user) { user = { phone: digits, verified: false, code: null, purchases: [] }; users.push(user); }
-
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    user.code = code; writeJSON(USERS_FILE, users);
-
-    try { await sendSMS(digits, `Your verification code is: ${code}`); }
-    catch (e) { console.error('SMS failed:', e?.message || e); }
-
-    return sendJSON(res, 200, { ok: true, message: 'Code sent via SMS' });
+  // Phone login (no-op with Firebase Web; we keep for backward compatibility)
+  if (req.method === 'POST' && pathN === '/api/login_phone') {
+    return sendJSON(res, 200, { ok:true, provider:'firebase', message:'Use client Firebase to send/verify code' });
   }
 
-  // --- PHONE VERIFY ---
-  if (req.method === 'POST' && path === '/api/verify_phone') {
-    const { phone, code } = await parseBody(req);
-    const digits = String(phone || '').replace(/\D/g, '').slice(0, 10);
-    if (digits.length !== 10 || !/^\d{6}$/.test(String(code || ''))) {
-      return sendJSON(res, 400, { error: 'Invalid input' });
-    }
+  // Verify phone: accept Firebase ID token; mark user verified
+  if (req.method === 'POST' && pathN === '/api/verify_phone') {
+    const body = await parseBody(req);
+    const idToken = body.idToken || null;
+    if (!idToken) return sendJSON(res, 400, { error:'idToken required' });
+
+    let decoded = null;
+    try { decoded = await admin.auth().verifyIdToken(idToken); }
+    catch (e){ return sendJSON(res, 401, { error:'Invalid token' }); }
+
+    const phone = (decoded.phone_number || '').replace(/\D/g,'').slice(-10);
+    if (phone.length !== 10) return sendJSON(res, 400, { error:'No phone in token' });
 
     const users = readJSON(USERS_FILE, []);
-    const user = users.find(u => u.phone === digits);
-    if (!user) return sendJSON(res, 404, { error: 'User not found' });
-    if (user.code !== String(code)) return sendJSON(res, 400, { error: 'Incorrect code' });
+    let user = users.find(u=>u.phone===phone);
+    if(!user){ user = { phone, verified:true, purchases:[] }; users.push(user); }
+    else { user.verified = true; }
+    writeJSON(USERS_FILE, users);
 
-    user.verified = true; user.code = null; writeJSON(USERS_FILE, users);
-    return sendJSON(res, 200, { ok: true, phone: digits });
+    return sendJSON(res, 200, { ok:true, phone });
   }
 
-  // PURCHASE (requires verified phone; takes receipt email + affiliation + guests)
-  if(req.method === 'POST' && path === '/api/purchase'){
-    const { phone, email, affiliation, seats: seatIds, guests } = await parseBody(req);
-    const digits = String(phone||'').replace(/\D/g,'').slice(0,10);
-    if (digits.length !== 10) return sendJSON(res, 400, { error:'Invalid phone' });
+  // Purchase: requires valid Firebase ID token (Authorization: Bearer <idToken>)
+  if (req.method === 'POST' && pathN === '/api/purchase') {
+    const decoded = await verifyIdTokenFromRequest(req);
+    if (!decoded) return sendJSON(res, 401, { error:'Unauthorized' });
+
+    const phone = (decoded.phone_number || '').replace(/\D/g,'').slice(-10);
+    if (phone.length !== 10) return sendJSON(res, 400, { error:'No phone in token' });
+
+    const { email, affiliation, seats: seatIds, guests } = await parseBody(req);
     if(!Array.isArray(seatIds) || seatIds.length===0) return sendJSON(res, 400, { error:'Seats required' });
-    
-    // validate receipt email
+
     const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email||''));
     if(!emailOk) return sendJSON(res, 400, { error:'Valid receipt email required' });
     const aff = String(affiliation||'none').toLowerCase();
@@ -244,15 +244,16 @@ async function handleAPI(req, res){  // Normalize the path; ignore query + trail
     }
 
     const users = readJSON(USERS_FILE, []);
-    const user = users.find(u=>u.phone===digits && u.verified);
+    const user = users.find(u=>u.phone===phone && u.verified);
     if(!user) return sendJSON(res, 403, { error:'Phone not verified' });
 
-    // max 2 seats per phone (across all purchases)
+    const seats = loadSeats();
+
+    // max 2 seats/phone across all time
     const already = Array.isArray(user.purchases) ? user.purchases.reduce((n,p)=> n + (Array.isArray(p.seats)?p.seats.length:0), 0) : 0;
-    if (already + seatIds.length > 2) return sendJSON(res, 400, { error:`Seat limit exceeded. You already reserved ${already} seat(s). Max total is 2.` });
+    if (already + seatIds.length > 2) return sendJSON(res, 400, { error:`Seat limit exceeded. You already reserved ${already} seat(s). Max is 2.` });
 
     // availability
-    const seats = loadSeats();
     const bad = [];
     seatIds.forEach(id=>{ const s=seats.find(se=>se.id===id); if(!s || s.status!=='available') bad.push(id); });
     if (bad.length) return sendJSON(res, 409, { error:`Seats unavailable: ${bad.join(', ')}` });
@@ -266,13 +267,12 @@ async function handleAPI(req, res){  // Normalize the path; ignore query + trail
     if(!Array.isArray(user.purchases)) user.purchases=[];
     user.purchases.push(purchase); writeJSON(USERS_FILE, users);
 
-    // Create PDF & email (no price mentioned)
     const showTime = 'November 22, 2025, 7:00 PM';
     const { filePath, mime, filename } = await createReceiptPDF({
       orderId, email, seats: seatIds, guests: purchase.guests, showTime, reservationTime: purchase.timestamp
     });
     const guestLines = (purchase.guests||[]).map((g,i)=>`${i+1}. ${g.name} — ${g.seat}`).join('\n') || '(No guest names provided)';
-    const text = `Thanks! Your seats are: ${seatIds.join(', ')}
+    const text = `Thanks! Your seats: ${seatIds.join(', ')}
 Guests:
 ${guestLines}
 All tickets are free.
