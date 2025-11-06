@@ -1,12 +1,11 @@
-// server.js — Firebase Phone Auth verify + seats + PDF + reservation validation
+// server.js — Postgres-backed API + Firebase phone verify + PDF/QR receipt + validate
 
 const http = require('http');
 const fs   = require('fs');
 const path = require('path');
 
-let nodemailer = null;
-let PDFDocument = null;
-let QRCode = null;
+const { Pool } = require('pg');
+let nodemailer = null, PDFDocument = null, QRCode = null;
 try { nodemailer  = require('nodemailer'); } catch {}
 try { PDFDocument = require('pdfkit'); }     catch {}
 try { QRCode      = require('qrcode'); }     catch {}
@@ -17,45 +16,32 @@ const admin = require('firebase-admin');
   try {
     const saPath = process.env.FIREBASE_SA_PATH || path.join(__dirname, 'firebase-service-account.json');
     const serviceAccount = JSON.parse(fs.readFileSync(saPath, 'utf8'));
-    if (!admin.apps.length) {
-      admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-      console.log('Firebase Admin initialized');
-    }
+    if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    console.log('Firebase Admin initialized');
   } catch (e) {
     console.error('Firebase Admin init failed:', e?.message || e);
   }
 })();
 
+// ---------- Postgres ----------
+const useDb = String(process.env.USE_DB || '').toLowerCase() === 'postgres';
+if (!useDb) {
+  console.error('USE_DB is not set to "postgres". Set it in .env.');
+  process.exit(1);
+}
+const pool = new Pool(); // Reads PG* env vars
+
 // ---------- Paths & constants ----------
 const DATA_DIR     = process.env.DATA_DIR || __dirname;
-const USERS_FILE   = path.join(DATA_DIR, 'users.json');
-const SEATS_FILE   = path.join(DATA_DIR, 'seats.json');
 const EMAILS_DIR   = path.join(DATA_DIR, 'emails');
 const RECEIPTS_DIR = path.join(DATA_DIR, 'receipts');
 const LOGO_PATH    = path.join(DATA_DIR, 'logo.png');
 
-const PUBLIC_BASE  = (process.env.PUBLIC_BASE_URL || 'https://isaconcertticket.com').replace(/\/+$/,'');
+const PUBLIC_BASE  = (process.env.PUBLIC_BASE || 'https://isaconcertticket.com').replace(/\/+$/,'');
 const SHOW_TIME    = 'November 22, 2025, 7:00 PM – 8:30 PM';
 
 if (!fs.existsSync(EMAILS_DIR))   fs.mkdirSync(EMAILS_DIR,   { recursive: true });
 if (!fs.existsSync(RECEIPTS_DIR)) fs.mkdirSync(RECEIPTS_DIR, { recursive: true });
-
-function readJSON(file, fallback){ try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
-function writeJSON(file, obj){ fs.writeFileSync(file, JSON.stringify(obj, null, 2)); }
-
-// ---------- Seats seed ----------
-function generateInitialSeats() {
-  const seats = []; const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  for (let i=0;i<10;i++){ const row = alphabet[i]; for (let j=1;j<=25;j++){ seats.push({ id:`${row}${j}`, row, number:j, status:'available' }); } }
-  return seats;
-}
-function loadSeats(){
-  let seats = readJSON(SEATS_FILE, []);
-  if (!Array.isArray(seats) || seats.length===0) { seats = generateInitialSeats(); writeJSON(SEATS_FILE, seats); }
-  return seats;
-}
-if (!fs.existsSync(SEATS_FILE)) writeJSON(SEATS_FILE, generateInitialSeats());
-if (!fs.existsSync(USERS_FILE)) writeJSON(USERS_FILE, []);
 
 // ---------- HTTP helpers ----------
 function sendJSON(res, code, obj){
@@ -91,6 +77,15 @@ function parseBody(req){
   return new Promise((resolve)=>{ let data=''; req.on('data', c=> data+=c); req.on('end', ()=>{ try{ resolve(JSON.parse(data||'{}')); }catch{ resolve({}); } }); });
 }
 
+async function verifyIdTokenFromRequest(req){
+  const authz = req.headers['authorization'] || '';
+  const m = authz.match(/^Bearer\s+(.+)$/i);
+  const token = m ? m[1] : null;
+  if (!token) return null;
+  try { return await admin.auth().verifyIdToken(token); }
+  catch(e){ console.error('verifyIdToken error:', e?.message || e); return null; }
+}
+
 // ---------- Email ----------
 async function sendEmail(to, subject, text, attachments = []){
   const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_SECURE } = process.env;
@@ -108,6 +103,7 @@ async function sendEmail(to, subject, text, attachments = []){
       return;
     }catch(e){ console.error('SMTP send failed:', e?.message || e); }
   }
+  // Fallback: write to /emails dir
   const safeSubject = subject.replace(/[^\w.-]+/g,'_').slice(0,80);
   const safeTo = (to||'unknown').replace(/[^\w@.-]+/g,'_');
   const fname = path.join(EMAILS_DIR, `${Date.now()}_${safeSubject}_${safeTo}.txt`);
@@ -115,7 +111,7 @@ async function sendEmail(to, subject, text, attachments = []){
   fs.writeFileSync(fname, body + (attachLines?`\n\n${attachLines}\n`:''));
 }
 
-// ---------- PDF (with QR that opens /validate.html?orderId=...) ----------
+// ---------- PDF (with QR → /validate.html?orderId=...) ----------
 async function createReceiptPDF({ orderId, email, seats, guests, reservationTime }){
   if (!PDFDocument || !QRCode) {
     const fallback = path.join(RECEIPTS_DIR, `ticket_receipt_${orderId}.txt`);
@@ -154,7 +150,6 @@ async function createReceiptPDF({ orderId, email, seats, guests, reservationTime
   if (guestList.length){ guestList.forEach((g,i)=>{ doc.text(`${i+1}. ${g.name} — Seat ${g.seat}`, 60, y); y+=16; }); }
   else { doc.text(`Seats: ${seats.join(', ')}`, 60, y); y+=16; }
 
-  // QR that opens the public validation page
   const validateURL = `${PUBLIC_BASE}/validate.html?orderId=${encodeURIComponent(orderId)}`;
   try{
     const qrBuffer = await QRCode.toBuffer(validateURL, { type:'png', margin:1, scale:6 });
@@ -170,22 +165,73 @@ async function createReceiptPDF({ orderId, email, seats, guests, reservationTime
   return { filePath, mime:'application/pdf', filename: path.basename(filePath) };
 }
 
-// ---------- Auth helper ----------
-async function verifyIdTokenFromRequest(req){
-  const authz = req.headers['authorization'] || '';
-  const m = authz.match(/^Bearer\s+(.+)$/i);
-  const token = m ? m[1] : null;
-  if (!token) return null;
-  try { return await admin.auth().verifyIdToken(token); }
-  catch(e){ console.error('verifyIdToken error:', e?.message || e); return null; }
+// ---------- DB helpers ----------
+async function dbGetSeats() {
+  const { rows } = await pool.query(
+    'SELECT seat_id AS id, seat_row AS row, seat_number AS number, status FROM seats ORDER BY seat_row, seat_number'
+  );
+  return rows;
+}
+
+async function dbVerifyPhone(phone10) {
+  await pool.query(
+    'INSERT INTO users(phone,verified) VALUES($1,TRUE) ON CONFLICT (phone) DO UPDATE SET verified=EXCLUDED.verified',
+    [phone10]
+  );
+}
+
+async function dbSeatCountForUser(phone10) {
+  const { rows } = await pool.query(`
+    SELECT COALESCE(SUM(x.cnt),0)::int AS total
+    FROM (
+      SELECT COUNT(*) AS cnt
+      FROM purchases p
+      JOIN purchase_seats ps USING(order_id)
+      WHERE p.phone = $1
+    ) x
+  `,[phone10]);
+  return rows[0].total;
+}
+
+async function dbReserveSeats({ phone10, email, affiliation, seatIds, guests }) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Seat availability
+    const { rows: bad } = await client.query(
+      'SELECT seat_id FROM seats WHERE seat_id = ANY($1) AND status <> $2',
+      [seatIds, 'available']
+    );
+    if (bad.length) throw new Error(`Seats unavailable: ${bad.map(r=>r.seat_id).join(', ')}`);
+
+    // Insert purchase
+    const orderId = `R${Date.now()}${Math.floor(Math.random()*1000)}`;
+    await client.query(
+      'INSERT INTO purchases(order_id, phone, email, affiliation) VALUES($1,$2,$3,$4)',
+      [orderId, phone10, email, affiliation]
+    );
+
+    for (const s of seatIds) {
+      const g = (guests || []).find(x => x.seat === s)?.name || '';
+      await client.query('INSERT INTO purchase_seats(order_id, seat_id, guest_name) VALUES($1,$2,$3)', [orderId, s, g]);
+      await client.query('UPDATE seats SET status = $2 WHERE seat_id = $1', [s, 'sold']);
+    }
+
+    await client.query('COMMIT');
+    return orderId;
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 // ---------- API ----------
 async function handleAPI(req, res){
   const { pathname, searchParams } = new URL(req.url, 'http://localhost');
   const pathN = (pathname || '/').replace(/\/+$/, '') || '/';
-  console.log(new Date().toISOString(), req.method, pathN);
-
   if (req.method === 'OPTIONS') return sendJSON(res, 204, { ok: true });
 
   if (req.method === 'GET' && pathN === '/api/health') {
@@ -193,13 +239,13 @@ async function handleAPI(req, res){
   }
 
   if (req.method === 'GET' && pathN === '/api/seats') {
-    const raw = loadSeats();
-    const seats = raw.map(({ id, row, number, status }) => ({ id, row, number, status }));
+    const seats = await dbGetSeats();
     return sendJSON(res, 200, { seats });
   }
 
   if (req.method === 'POST' && pathN === '/api/login_phone') {
-    return sendJSON(res, 200, { ok:true, provider:'firebase', message:'Use client Firebase to send/verify code' });
+    // Kept for client compatibility (Firebase sends SMS on the client)
+    return sendJSON(res, 200, { ok:true, provider:'firebase' });
   }
 
   if (req.method === 'POST' && pathN === '/api/verify_phone') {
@@ -209,17 +255,10 @@ async function handleAPI(req, res){
 
     try {
       const decoded = await admin.auth().verifyIdToken(idToken);
-      const phone = (decoded.phone_number || '').replace(/\D/g,'').slice(-10);
-      if (phone.length !== 10) return sendJSON(res, 400, { error:'No phone in token' });
-
-      const users = readJSON(USERS_FILE, []);
-      let user = users.find(u=>u.phone===phone);
-      if(!user){ user = { phone, verified:true, purchases:[] }; users.push(user); }
-      else { user.verified = true; }
-      writeJSON(USERS_FILE, users);
-
-      console.log('verify_phone OK for', phone);
-      return sendJSON(res, 200, { ok:true, phone });
+      const phone10 = String(decoded.phone_number || '').replace(/\D/g,'').slice(-10);
+      if (phone10.length !== 10) return sendJSON(res, 400, { error:'No phone in token' });
+      await dbVerifyPhone(phone10);
+      return sendJSON(res, 200, { ok:true, phone: phone10 });
     } catch (e) {
       console.error('verify_phone error:', e?.message || e);
       return sendJSON(res, 401, { error:'Invalid token' });
@@ -230,8 +269,8 @@ async function handleAPI(req, res){
     const decoded = await verifyIdTokenFromRequest(req);
     if (!decoded) return sendJSON(res, 401, { error:'Unauthorized' });
 
-    const phone = (decoded.phone_number || '').replace(/\D/g,'').slice(-10);
-    if (phone.length !== 10) return sendJSON(res, 400, { error:'No phone in token' });
+    const phone10 = String(decoded.phone_number || '').replace(/\D/g,'').slice(-10);
+    if (phone10.length !== 10) return sendJSON(res, 400, { error:'No phone in token' });
 
     const { email, affiliation, seats: seatIds, guests } = await parseBody(req);
     if(!Array.isArray(seatIds) || seatIds.length===0) return sendJSON(res, 400, { error:'Seats required' });
@@ -243,30 +282,22 @@ async function handleAPI(req, res){
       return sendJSON(res, 400, { error:'Students/Staff must use @uark.edu or @uada.edu' });
     }
 
-    const users = readJSON(USERS_FILE, []);
-    const user = users.find(u=>u.phone===phone && u.verified);
-    if(!user) return sendJSON(res, 403, { error:'Phone not verified' });
-
-    const seats = loadSeats();
-    const already = Array.isArray(user.purchases) ? user.purchases.reduce((n,p)=> n + (Array.isArray(p.seats)?p.seats.length:0), 0) : 0;
+    const already = await dbSeatCountForUser(phone10);
     if (already + seatIds.length > 2) return sendJSON(res, 400, { error:`Seat limit exceeded. You already reserved ${already} seat(s). Max is 2.` });
 
-    const bad = []; seatIds.forEach(id=>{ const s=seats.find(se=>se.id===id); if(!s || s.status!=='available') bad.push(id); });
-    if (bad.length) return sendJSON(res, 409, { error:`Seats unavailable: ${bad.join(', ')}` });
+    let orderId;
+    try {
+      orderId = await dbReserveSeats({ phone10, email, affiliation: aff, seatIds, guests });
+    } catch (e) {
+      return sendJSON(res, 409, { error: e.message || 'Seats unavailable' });
+    }
 
-    seatIds.forEach(id=>{ const s=seats.find(se=>se.id===id); if(s) s.status='sold'; });
-    writeJSON(SEATS_FILE, seats);
-
-    const orderId = `R${Date.now()}${Math.floor(Math.random()*1000)}`;
-    const purchase = { seats: seatIds, guests: Array.isArray(guests)?guests:[], orderId, timestamp: Date.now(), email, affiliation: aff };
-    if(!Array.isArray(user.purchases)) user.purchases=[];
-    user.purchases.push(purchase); writeJSON(USERS_FILE, users);
-
+    // Email receipt (PDF with QR to /validate.html?orderId=...)
     const { filePath, mime, filename } = await createReceiptPDF({
-      orderId, email, seats: seatIds, guests: purchase.guests, reservationTime: purchase.timestamp
+      orderId, email, seats: seatIds, guests: guests || [], reservationTime: Date.now()
     });
 
-    const guestLines = (purchase.guests||[]).map((g,i)=>`${i+1}. ${g.name} — ${g.seat}`).join('\n') || '(No guest names provided)';
+    const guestLines = (guests||[]).map((g,i)=>`${i+1}. ${g.name} — ${g.seat}`).join('\n') || '(No guest names provided)';
     const text = `Thanks! Your seats: ${seatIds.join(', ')}
 Guests:
 ${guestLines}
@@ -279,35 +310,40 @@ Please arrive 15 minutes early.`;
     return sendJSON(res, 200, { ok:true, orderId });
   }
 
-  // NEW: validate reservation by orderId (for QR link)
+  // Validate reservation (QR target)
   if (req.method === 'GET' && pathN === '/api/validate') {
     const orderId = (searchParams.get('orderId') || '').trim();
     if (!orderId) return sendJSON(res, 400, { ok:false, error:'orderId required' });
 
-    const users = readJSON(USERS_FILE, []);
-    for (const u of users) {
-      const p = (u.purchases||[]).find(x => x.orderId === orderId);
-      if (p) {
-        return sendJSON(res, 200, {
-          ok:true,
-          orderId,
-          seats: p.seats,
-          guests: p.guests,
-          phone: u.phone,
-          timestamp: p.timestamp
-        });
-      }
-    }
-    return sendJSON(res, 404, { ok:false, error:'Reservation not found' });
+    const { rows } = await pool.query(`
+      SELECT p.order_id, p.phone, p.email, p.affiliation, p.reserved_at,
+             array_agg(ps.seat_id ORDER BY ps.seat_id)    AS seats,
+             array_agg(ps.guest_name ORDER BY ps.seat_id) AS guests
+      FROM purchases p
+      LEFT JOIN purchase_seats ps USING(order_id)
+      WHERE p.order_id = $1
+      GROUP BY p.order_id, p.phone, p.email, p.affiliation, p.reserved_at
+    `,[orderId]);
+
+    if (!rows.length) return sendJSON(res, 404, { ok:false, error:'Reservation not found' });
+    const row = rows[0];
+    return sendJSON(res, 200, {
+      ok:true,
+      orderId: row.order_id,
+      seats: row.seats,
+      guests: (row.guests || []).map((name, i) => ({ name, seat: row.seats[i] })),
+      phone: row.phone,
+      timestamp: row.reserved_at
+    });
   }
 
   return sendApiNotFound(res);
 }
 
-function requestHandler(req,res){
+const server = http.createServer((req,res)=>{
   if(req.url.startsWith('/api/')) handleAPI(req,res).catch(err=>{ console.error(err); sendJSON(res, 500, { error:'Internal server error' }); });
   else serveStatic(req,res);
-}
+});
 
 const PORT = process.env.PORT || 3000;
-http.createServer(requestHandler).listen(PORT, ()=> console.log(`Server listening on port ${PORT}`) );
+server.listen(PORT, ()=> console.log(`Server listening on ${PORT}`) );
