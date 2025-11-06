@@ -1,4 +1,4 @@
-// script.js — Firebase phone auth + robust API calls with 5xx fallback
+// script.js — Firebase phone auth + robust API + full seat UI
 
 // --- Firebase Web config (your project) ---
 const firebaseConfig = {
@@ -31,7 +31,6 @@ async function apiFetch(path, opts = {}) {
     }
     return r1;
   } catch (e) {
-    // Network failure → try fallback
     const url2 = `${API_URLS.fallback}${path}`;
     if (API_URLS.primary !== API_URLS.fallback) return fetch(url2, opts);
     throw e;
@@ -99,14 +98,13 @@ async function verifyCode(codeRaw) {
   if (!res.ok) {
     let j = {};
     try { j = await res.json(); } catch {}
-    // Show 5xx number if present
     const statusInfo = res.status ? ` (${res.status})` : '';
     throw new Error(j.error || `Server verify failed${statusInfo}`);
   }
   return true;
 }
 
-// Purchase seats (unchanged)
+// Purchase seats
 async function purchaseSeats({ seats, guests, email, affiliation }) {
   const idToken = await getIdToken();
   if (!idToken) throw new Error('Please verify your phone first.');
@@ -124,20 +122,145 @@ async function purchaseSeats({ seats, guests, email, affiliation }) {
   return j;
 }
 
-// ----- Wire up to DOM -----
+/* ------------------------- Seat rendering + UI ------------------------- */
+
+const state = {
+  seats: [],
+  selected: new Set(),   // up to 2
+};
+
+function $(sel) { return document.querySelector(sel); }
+function $all(sel) { return Array.from(document.querySelectorAll(sel)); }
+
+function setHidden(el, hide) { hide ? el.classList.add('hidden') : el.classList.remove('hidden'); }
+
+function updateAvailableCounter() {
+  const available = state.seats.filter(s => s.status === 'available').length;
+  const ctn = $('#available-count');
+  if (ctn) {
+    ctn.querySelector('span').textContent = String(available);
+    setHidden(ctn, false);
+  }
+}
+
+function renderSeatMap() {
+  const map = $('#seat-map');
+  if (!map) return;
+
+  map.innerHTML = '';
+  state.seats.forEach(seat => {
+    const div = document.createElement('div');
+    div.className = 'seat' + (seat.status !== 'available' ? ' sold' : '') + (state.selected.has(seat.id) ? ' selected' : '');
+    div.textContent = seat.id;
+    div.dataset.id = seat.id;
+
+    if (seat.status === 'available') {
+      div.addEventListener('click', () => {
+        if (state.selected.has(seat.id)) {
+          state.selected.delete(seat.id);
+        } else {
+          if (state.selected.size >= 2) return; // limit
+          state.selected.add(seat.id);
+        }
+        renderSeatMap();
+        updateSummary();
+      });
+    }
+    map.appendChild(div);
+  });
+
+  updateAvailableCounter();
+}
+
+function updateSummary() {
+  const list = $('#selected-seats');
+  const btn  = $('#checkout-btn');
+  if (!list || !btn) return;
+
+  list.innerHTML = '';
+  [...state.selected].forEach(id => {
+    const li = document.createElement('li');
+    li.textContent = id;
+    list.appendChild(li);
+  });
+
+  btn.disabled = state.selected.size === 0;
+}
+
+async function loadSeats() {
+  const res = await apiFetch('/seats');
+  const j = await res.json();
+  state.seats = Array.isArray(j.seats) ? j.seats : [];
+  renderSeatMap();
+  setHidden($('#seat-area'), false);
+  setHidden($('#summary'), false);
+}
+
+function showSignedInHeader() {
+  const info = $('#user-info');
+  const phoneSpan = $('#user-phone');
+  const headerMsg = $('#auth-header-message');
+  const u = auth.currentUser;
+  if (u && phoneSpan) phoneSpan.textContent = u.phoneNumber || '';
+  setHidden(info, !u);
+  if (u) headerMsg.textContent = 'Select up to 2 free seats.';
+}
+
+function signOutFlow() {
+  auth.signOut().catch(()=>{});
+  // reset UI
+  state.selected.clear();
+  updateSummary();
+  setHidden($('#seat-area'), true);
+  setHidden($('#summary'), true);
+  setHidden($('#auth-container'), false);
+}
+
+// Guest modal orchestration
+function openGuestModal() {
+  const modal = $('#guest-modal');
+  const namesBox = $('#guest-names');
+  const emailInput = $('#receipt-email');
+
+  // build inputs for each selected seat
+  namesBox.innerHTML = '';
+  [...state.selected].forEach((id, idx) => {
+    const wrap = document.createElement('div');
+    wrap.style.marginTop = '8px';
+    wrap.innerHTML = `
+      <label>Guest ${idx+1} (for seat ${id})</label>
+      <input type="text" class="guest-name" data-seat="${id}" placeholder="First Last" required />
+    `;
+    namesBox.appendChild(wrap);
+  });
+
+  emailInput.value = '';
+  setHidden(modal, false);
+}
+
+function closeGuestModal() { setHidden($('#guest-modal'), true); }
+function openConfirmModal(seatIds) {
+  $('#summary-seats').textContent = `Seats: ${seatIds.join(', ')}`;
+  setHidden($('#checkout-modal'), false);
+}
+function closeConfirmModal() { setHidden($('#checkout-modal'), true); }
+
+/* --------------------------- Wire up the DOM --------------------------- */
+
 window.addEventListener('DOMContentLoaded', () => {
   setupRecaptcha('recaptcha-container');
 
-  const phoneInput   = document.querySelector('#phone-input');
-  const sendBtn      = document.querySelector('#login-phone-btn');
-  const authMsg      = document.querySelector('#auth-message');
+  // Auth elements
+  const phoneInput   = $('#phone-input');
+  const sendBtn      = $('#login-phone-btn');
+  const authMsg      = $('#auth-message');
 
-  const codeInput    = document.querySelector('#code-input');
-  const verifyBtn    = document.querySelector('#verify-phone-btn');
-  const verifyMsg    = document.querySelector('#verification-message');
+  const codeInput    = $('#code-input');
+  const verifyBtn    = $('#verify-phone-btn');
+  const verifyMsg    = $('#verification-message');
 
-  const signInSection    = document.querySelector('#sign-in-section');
-  const verificationSection = document.querySelector('#verification-section');
+  const signInSection    = $('#sign-in-section');
+  const verificationSection = $('#verification-section');
 
   // Mask while typing
   if (phoneInput) {
@@ -179,9 +302,14 @@ window.addEventListener('DOMContentLoaded', () => {
       verifyMsg.textContent = 'Phone verified! You can now reserve seats.';
       verifyMsg.style.color = '#065f46';
       signInSection.classList.add('hidden');
+
+      // Reveal main UI
+      setHidden($('#auth-container'), true);
+      await loadSeats();
+      showSignedInHeader();
     } catch (e) {
       verifyMsg.textContent =
-        (e.message && /TypeError: Failed to fetch/i.test(String(e))) ? 
+        (e.message && /TypeError: Failed to fetch/i.test(String(e))) ?
           'Network error contacting the server. If your API is on a different domain, confirm the meta api-base URL or proxy /api on the same domain.' :
           (e.message || 'Verification failed.');
       verifyMsg.style.color = '#b91c1c';
@@ -190,4 +318,71 @@ window.addEventListener('DOMContentLoaded', () => {
       verifyBtn.disabled = false;
     }
   });
+
+  // If already signed in (page refresh after verify), show seats automatically
+  auth.onAuthStateChanged(async (u) => {
+    if (u) {
+      setHidden($('#auth-container'), true);
+      showSignedInHeader();
+      await loadSeats();
+    }
+  });
+
+  // Summary actions
+  $('#checkout-btn')?.addEventListener('click', () => {
+    if (state.selected.size === 0) return;
+    openGuestModal();
+  });
+  $('#guest-cancel-btn')?.addEventListener('click', closeGuestModal);
+
+  $('#guest-next-btn')?.addEventListener('click', () => {
+    const email = $('#receipt-email').value.trim();
+    const affiliation = (document.querySelector('input[name="affil"]:checked')?.value || 'none').toLowerCase();
+
+    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    if (!emailOk) return alert('Please enter a valid receipt email.');
+
+    if (['student','staff'].includes(affiliation) && !/@(uark|uada)\.edu$/i.test(email)) {
+      return alert('Students/Staff must use @uark.edu or @uada.edu for the receipt email.');
+    }
+
+    const names = $all('.guest-name').map(inp => ({ name: inp.value.trim(), seat: inp.dataset.seat }));
+    if (names.some(g => !g.name)) return alert('Please enter all guest names.');
+
+    closeGuestModal();
+    openConfirmModal([...state.selected]);
+
+    // stash for confirm
+    window.__pendingOrder = { email, affiliation, guests: names };
+  });
+
+  $('#cancel-btn')?.addEventListener('click', () => {
+    closeConfirmModal();
+    window.__pendingOrder = null;
+  });
+
+  $('#confirm-btn')?.addEventListener('click', async () => {
+    const pending = window.__pendingOrder;
+    if (!pending) return;
+
+    try {
+      const result = await purchaseSeats({
+        seats: [...state.selected],
+        guests: pending.guests,
+        email: pending.email,
+        affiliation: pending.affiliation
+      });
+
+      alert(`Reservation confirmed! Order: ${result.orderId}\nA PDF receipt was sent to ${pending.email}.`);
+      closeConfirmModal();
+      state.selected.clear();
+      updateSummary();
+      await loadSeats(); // refresh sold seats
+    } catch (e) {
+      alert(e.message || 'Reservation failed.');
+    }
+  });
+
+  // Sign out button (header)
+  $('#signout-btn')?.addEventListener('click', signOutFlow);
 });
