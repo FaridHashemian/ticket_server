@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Validate Reservation</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="site-header">
+    <h1>Reservation Validation</h1>
+  </header>
+
+  <main class="site-main" style="grid-template-columns:1fr;">
+    <div class="auth-container" id="box">
+      <p id="msg" class="muted">Checking reservation…</p>
+      <div id="details" class="hidden">
+        <p><strong>Reservation #:</strong> <span id="order"></span></p>
+        <p><strong>Seats:</strong> <span id="seats"></span></p>
+        <p><strong>Guests:</strong></p>
+        <ul id="guests" class="selected-seats"></ul>
+      </div>
+    </div>
+  </main>
+
+  <footer class="site-footer"><p>&copy; 2025 Concert Organizer</p></footer>
+
+  <script>
+    (async function(){
+      const p = new URLSearchParams(location.search);
+      const orderId = p.get('orderId') || '';
+      const msg = document.getElementById('msg');
+      const details = document.getElementById('details');
+
+      if (!orderId) { msg.textContent = 'Missing orderId.'; msg.style.color = '#b91c1c'; return; }
+
+      try{
+        const r = await fetch(`/api/validate?orderId=${encodeURIComponent(orderId)}`);
+        const j = await r.json();
+        if (!r.ok || !j.ok) { msg.textContent = 'Reservation not found.'; msg.style.color = '#b91c1c'; return; }
+        document.getElementById('order').textContent = j.orderId;
+        document.getElementById('seats').textContent = (j.seats||[]).join(', ');
+        const ul = document.getElementById('guests');
+        (j.guests||[]).forEach(g => { const li=document.createElement('li'); li.textContent = `${g.name} — ${g.seat}`; ul.appendChild(li); });
+        msg.textContent = 'Reservation is VALID.'; msg.style.color = '#065f46';
+        details.classList.remove('hidden');
+      }catch{
+        msg.textContent = 'Network error.'; msg.style.color = '#b91c1c';
+      }
+    })();
+  </script>
+</body>
+</html>
