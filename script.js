@@ -157,14 +157,17 @@ function renderSeatMap() {
   map.innerHTML = '';
   state.seats.forEach(seat => {
     const div = document.createElement('div');
-    const disabled = !state.organizer || seat.status !== 'available';
+    const disabled = seat.status !== 'available';
     div.className = 'seat' + (seat.status !== 'available' ? ' sold' : '') + (state.selected.has(seat.id) ? ' selected' : '');
     div.textContent = formatSeatLabel(seat.id); div.dataset.id = seat.id;
 
     if (!disabled) {
       div.addEventListener('click', () => {
-        if (state.selected.has(seat.id)) state.selected.delete(seat.id);
-        else { state.selected.add(seat.id); } // unlimited for organizer
+        if (state.selected.has(seat.id)) { state.selected.delete(seat.id); }
+        else {
+          if (!state.organizer && state.selected.size >= 2) { alert('You can select up to 2 seats online.'); return; }
+          state.selected.add(seat.id);
+        } // organizer unlimited; others capped at 2
         renderSeatMap(); updateSummary();
       });
     }
@@ -178,7 +181,7 @@ function updateSummary() {
   if (!list || !btn) return;
   list.innerHTML = '';
   [...state.selected].forEach(id => { const li = document.createElement('li'); li.textContent = formatSeatLabel(id); list.appendChild(li); });
-  btn.disabled = !state.organizer || state.selected.size === 0;
+  btn.disabled = state.selected.size === 0 || (!state.organizer && state.selected.size > 2);
 }
 
 async function loadSeats() {
@@ -284,20 +287,8 @@ window.addEventListener('DOMContentLoaded', () => {
       state.organizer = !!(u && u.phoneNumber === ALLOWED_PHONE);
 
       showSignedInHeader();
-      if (!state.organizer) {
-        setHidden(document.getElementById('notice-container'), false);
-        setHidden(document.getElementById('auth-container'), false);
-        document.getElementById('auth-message').textContent = '';
-        document.getElementById('verification-message').textContent = '';
-        setHidden(document.getElementById('seat-area'), true);
-        setHidden(document.getElementById('summary'), true);
-        verifyMsg.textContent = 'To reserve seats, please call (650) 418-5241.'; 
-        verifyMsg.style.color = '#065f46';
-        return;
-      }
-
-      // Organizer can proceed
-      verifyMsg.textContent = 'Organizer verified! You can now reserve unlimited seats.'; verifyMsg.style.color = '#065f46';
+      // Both organizer and others can proceed; organizer has unlimited seats
+      verifyMsg.textContent = state.organizer ? 'Organizer verified! You can now reserve unlimited seats.' : 'Signed in. You can reserve up to 2 seats online.'; verifyMsg.style.color = '#065f46';
       document.getElementById('sign-in-section').classList.add('hidden');
       setHidden(document.getElementById('auth-container'), true);
       await loadSeats();
@@ -316,13 +307,8 @@ window.addEventListener('DOMContentLoaded', () => {
   auth.onAuthStateChanged(async (u) => {
     if (u) {
       state.organizer = u.phoneNumber === ALLOWED_PHONE;
-      if (state.organizer) { setHidden($('#auth-container'), true); await loadSeats(); }
-      else {
-        setHidden($('#notice-container'), false);
-        setHidden($('#auth-container'), false);
-        setHidden($('#seat-area'), true);
-        setHidden($('#summary'), true);
-      }
+      setHidden($('#auth-container'), true);
+      await loadSeats();
       showSignedInHeader();
     }
   });

@@ -169,9 +169,8 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/api/purchase' && req.method === 'POST') {
       const phone = await getAuthedPhone(req);
       if (!phone) return sendJSON(res, 401, { error: 'Unauthorized' });
-      if (phone !== ALLOWED_PHONE) {
-        return sendJSON(res, 403, { error: 'Reservations are handled by phone. Please call (650) 418-5241.' });
-      }
+      // Non-organizers can reserve up to 2 seats per order
+      const isOrganizer = phone === ALLOWED_PHONE;
 
       const body = await parseBody(req);
       const seats = Array.isArray(body.seats) ? body.seats : [];
@@ -180,6 +179,7 @@ const server = http.createServer(async (req, res) => {
 
       if (!email) return sendJSON(res, 400, { error: 'Missing email' });
       if (!seats.length) return sendJSON(res, 400, { error: 'No seats selected' });
+      if (!isOrganizer && seats.length > 2) return sendJSON(res, 403, { error: 'You can reserve up to 2 seats online. For more, please call (650) 418-5241.' });
 
       const orderId = 'R' + Date.now();
       await pool.query('INSERT INTO purchases (order_id, phone, email) VALUES ($1,$2,$3)', [orderId, phone, email]);
