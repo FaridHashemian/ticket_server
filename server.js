@@ -139,7 +139,7 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/api/health') return sendJSON(res, 200, { ok: true });
 
     if (req.url === '/api/seats' && req.method === 'GET') {
-      const { rows } = await pool.query('SELECT * FROM seats ORDER BY seat_id');
+      const { rows } = await pool.query("SELECT * FROM seats ORDER BY UPPER(REGEXP_REPLACE(seat_id,'[^A-Za-z]+.*$','')), (REGEXP_REPLACE(seat_id,'\\D','','g'))::int");
       const seats = rows.map(r => ({ id: r.seat_id, status: r.status }));
       return sendJSON(res, 200, { seats });
     }

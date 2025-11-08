@@ -117,6 +117,30 @@ async function purchaseSeats({ seats, guests, email, affiliation }) {
 
 /* ------------------------- Seat rendering + UI ------------------------- */
 
+// Convert 'A1' -> 'A01', keep original id for API
+function formatSeatLabel(id){
+  if(!id) return '';
+  const m = String(id).match(/^([A-Za-z]+)(\d+)$/);
+  if(!m) return String(id);
+  const row = m[1].toUpperCase();
+  const num = String(parseInt(m[2],10)).padStart(2,'0');
+  return row + num;
+}
+
+// Sort seats by row letter(s) then numeric index
+function seatCompare(a,b){
+  const ra = String(a.id).match(/^([A-Za-z]+)(\d+)$/) || [];
+  const rb = String(b.id).match(/^([A-Za-z]+)(\d+)$/) || [];
+  const raRow = (ra[1]||'').toUpperCase();
+  const rbRow = (rb[1]||'').toUpperCase();
+  if (raRow < rbRow) return -1;
+  if (raRow > rbRow) return 1;
+  const na = parseInt(ra[2]||'0',10);
+  const nb = parseInt(rb[2]||'0',10);
+  return na - nb;
+}
+
+
 const state = { seats: [], selected: new Set(), organizer: false };
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
@@ -135,7 +159,7 @@ function renderSeatMap() {
     const div = document.createElement('div');
     const disabled = !state.organizer || seat.status !== 'available';
     div.className = 'seat' + (seat.status !== 'available' ? ' sold' : '') + (state.selected.has(seat.id) ? ' selected' : '');
-    div.textContent = seat.id; div.dataset.id = seat.id;
+    div.textContent = formatSeatLabel(seat.id); div.dataset.id = seat.id;
 
     if (!disabled) {
       div.addEventListener('click', () => {
@@ -153,14 +177,14 @@ function updateSummary() {
   const list = $('#selected-seats'); const btn = $('#checkout-btn');
   if (!list || !btn) return;
   list.innerHTML = '';
-  [...state.selected].forEach(id => { const li = document.createElement('li'); li.textContent = id; list.appendChild(li); });
+  [...state.selected].forEach(id => { const li = document.createElement('li'); li.textContent = formatSeatLabel(id); list.appendChild(li); });
   btn.disabled = !state.organizer || state.selected.size === 0;
 }
 
 async function loadSeats() {
   const res = await apiFetch('/seats');
   const j = await res.json();
-  state.seats = Array.isArray(j.seats) ? j.seats : [];
+  state.seats = Array.isArray(j.seats) ? j.seats.sort(seatCompare) : [];
   renderSeatMap();
   setHidden($('#seat-area'), false);
   setHidden($('#summary'), false);
@@ -214,7 +238,7 @@ function openGuestModal() {
   setHidden($('#guest-modal'), false);
 }
 const closeGuestModal = () => setHidden($('#guest-modal'), true);
-function openConfirmModal(seatIds){ $('#summary-seats').textContent = `Seats: ${seatIds.join(', ')}`; setHidden($('#checkout-modal'), false); }
+function openConfirmModal(seatIds){ $('#summary-seats').textContent = `Seats: ${seatIds.map(formatSeatLabel).join(', ')}`; setHidden($('#checkout-modal'), false); }
 const closeConfirmModal = () => setHidden($('#checkout-modal'), true);
 
 /* --------------------------- Wire up the DOM --------------------------- */
