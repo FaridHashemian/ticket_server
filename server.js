@@ -112,6 +112,13 @@ function makeOrderId(){
   return ('R' + part).slice(0,10);
 }
 
+function phoneKey10(phone){
+  // Keep last 10 digits for DB columns limited to varchar(10)
+  if(!phone) return null;
+  const digits = String(phone).replace(/\D/g,'').slice(-10);
+  return digits || null;
+}
+
 function parseBody(req) {
   return new Promise(resolve => {
     let data = '';
@@ -168,7 +175,8 @@ const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       const decoded = await admin.auth().verifyIdToken(body.idToken);
       const phone = decoded.phone_number;
-      await pool.query('INSERT INTO users (phone, verified) VALUES ($1, true) ON CONFLICT (phone) DO UPDATE SET verified=true', [phone]);
+      const pk = phoneKey10(phone);
+      await pool.query('INSERT INTO users (phone, verified) VALUES ($1, true) ON CONFLICT (phone) DO UPDATE SET verified=true', [pk]);
       return sendJSON(res, 200, { ok: true });
     }
 
@@ -188,7 +196,8 @@ const server = http.createServer(async (req, res) => {
       if (!isOrganizer && seats.length > 2) return sendJSON(res, 403, { error: 'You can reserve up to 2 seats online. For more, please call (650) 418-5241.' });
 
       const orderId = makeOrderId();
-      await pool.query('INSERT INTO purchases (order_id, phone, email) VALUES ($1,$2,$3)', [orderId, phone, email]);
+      const pk = phoneKey10(phone);
+      await pool.query('INSERT INTO purchases (order_id, phone, email) VALUES ($1,$2,$3)', [orderId, pk, email]);
       for (const s of seats) {
         await pool.query('UPDATE seats SET status=$1 WHERE seat_id=$2', ['sold', s]);
       }
