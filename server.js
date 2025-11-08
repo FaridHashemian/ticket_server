@@ -92,6 +92,7 @@ async function createReceiptPDF(order) {
   doc.text(`Show Time: ${SHOW_TIME}`);
   doc.text(`Seats: ${order.seats.join(', ')}`);
   doc.text(`Guests: ${(order.guests || []).map(g => `${g.name} (${g.seat})`).join(', ')}`);
+  doc.text(`Affiliation: ${order.affiliation || 'none'}`);
   doc.moveDown();
   doc.text('Please arrive 15 minutes early.');
 
@@ -190,19 +191,22 @@ const server = http.createServer(async (req, res) => {
       const seats = Array.isArray(body.seats) ? body.seats : [];
       const guests = Array.isArray(body.guests) ? body.guests : [];
       const email = String(body.email || '').trim();
+      let affiliation = String(body.affiliation || 'none').toLowerCase();
+      if (!['none','student','staff'].includes(affiliation)) affiliation = 'none';
 
       if (!email) return sendJSON(res, 400, { error: 'Missing email' });
+      if (!affiliation) affiliation = 'none';
       if (!seats.length) return sendJSON(res, 400, { error: 'No seats selected' });
       if (!isOrganizer && seats.length > 2) return sendJSON(res, 403, { error: 'You can reserve up to 2 seats online. For more, please call (650) 418-5241.' });
 
       const orderId = makeOrderId();
       const pk = phoneKey10(phone);
-      await pool.query('INSERT INTO purchases (order_id, phone, email) VALUES ($1,$2,$3)', [orderId, pk, email]);
+      await pool.query('INSERT INTO purchases (order_id, phone, email, affiliation) VALUES ($1,$2,$3,$4)', [orderId, pk, email, affiliation]);
       for (const s of seats) {
         await pool.query('UPDATE seats SET status=$1 WHERE seat_id=$2', ['sold', s]);
       }
 
-      const pdfPath = await createReceiptPDF({ orderId, seats, guests, email });
+      const pdfPath = await createReceiptPDF({ orderId, seats, guests, email, affiliation });
       await sendEmail(email, 'Your Concert Ticket Receipt', `Reservation confirmed.\nOrder ID: ${orderId}`, [
         { filename: 'receipt.pdf', path: pdfPath }
       ]);
