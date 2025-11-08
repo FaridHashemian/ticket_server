@@ -1,4 +1,6 @@
-// script.js — Firebase phone auth + robust API + full seat UI (with clean Sign-Out reset)
+// script.js — Organizer-only booking (unlimited); others see phone notice
+// Organizer phone (E.164): +1 650-418-5241
+const ALLOWED_PHONE = "+16504185241";
 
 // --- Firebase Web config (your project) ---
 const firebaseConfig = {
@@ -18,7 +20,6 @@ function resolveApiBase() {
 }
 const API_URLS = resolveApiBase();
 
-// Generic fetch with fallback to same-origin for 5xx/network failures
 async function apiFetch(path, opts = {}) {
   const url1 = `${API_URLS.primary}${path}`;
   try {
@@ -58,7 +59,6 @@ function formatPhoneMask(raw) {
 // reCAPTCHA
 let recaptchaVerifier = null;
 function setupRecaptcha(containerId = 'recaptcha-container') {
-  // clear previous if present
   try { recaptchaVerifier?.clear(); } catch {}
   recaptchaVerifier = new firebase.auth.RecaptchaVerifier(containerId, { size: 'invisible' });
   recaptchaVerifier.render();
@@ -93,8 +93,7 @@ async function verifyCode(codeRaw) {
   });
 
   if (!res.ok) {
-    let j = {};
-    try { j = await res.json(); } catch {}
+    let j = {}; try { j = await res.json(); } catch {}
     const statusInfo = res.status ? ` (${res.status})` : '';
     throw new Error(j.error || `Server verify failed${statusInfo}`);
   }
@@ -118,7 +117,7 @@ async function purchaseSeats({ seats, guests, email, affiliation }) {
 
 /* ------------------------- Seat rendering + UI ------------------------- */
 
-const state = { seats: [], selected: new Set() }; // limit = 2
+const state = { seats: [], selected: new Set(), organizer: false };
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const setHidden = (el, hide) => (hide ? el.classList.add('hidden') : el.classList.remove('hidden'));
@@ -134,13 +133,14 @@ function renderSeatMap() {
   map.innerHTML = '';
   state.seats.forEach(seat => {
     const div = document.createElement('div');
+    const disabled = !state.organizer || seat.status !== 'available';
     div.className = 'seat' + (seat.status !== 'available' ? ' sold' : '') + (state.selected.has(seat.id) ? ' selected' : '');
     div.textContent = seat.id; div.dataset.id = seat.id;
 
-    if (seat.status === 'available') {
+    if (!disabled) {
       div.addEventListener('click', () => {
         if (state.selected.has(seat.id)) state.selected.delete(seat.id);
-        else { if (state.selected.size >= 2) return; state.selected.add(seat.id); }
+        else { state.selected.add(seat.id); } // unlimited for organizer
         renderSeatMap(); updateSummary();
       });
     }
@@ -154,7 +154,7 @@ function updateSummary() {
   if (!list || !btn) return;
   list.innerHTML = '';
   [...state.selected].forEach(id => { const li = document.createElement('li'); li.textContent = id; list.appendChild(li); });
-  btn.disabled = state.selected.size === 0;
+  btn.disabled = !state.organizer || state.selected.size === 0;
 }
 
 async function loadSeats() {
@@ -169,14 +169,12 @@ async function loadSeats() {
 function showSignedInHeader() {
   const info = $('#user-info');
   const phoneSpan = $('#user-phone');
-  const headerMsg = $('#auth-header-message');
   const u = auth.currentUser;
   if (u && phoneSpan) phoneSpan.textContent = u.phoneNumber || '';
   setHidden(info, !u);
-  if (u) headerMsg.textContent = 'Select up to 2 free seats.';
 }
 
-// **Clean sign-out**: hide verify section, clear messages, reset recaptcha & pending code
+// Clean sign-out + reset
 function signOutFlow() {
   auth.signOut().catch(()=>{});
   window._confirmationResult = null;
@@ -199,6 +197,7 @@ function signOutFlow() {
   setHidden($('#seat-area'), true);
   setHidden($('#summary'), true);
   setHidden($('#auth-container'), false);
+  setHidden($('#notice-container'), true);
 }
 
 // Guest modal handlers
@@ -224,7 +223,6 @@ window.addEventListener('DOMContentLoaded', () => {
 
   const phoneInput = $('#phone-input'); const sendBtn = $('#login-phone-btn'); const authMsg = $('#auth-message');
   const codeInput  = $('#code-input');  const verifyBtn = $('#verify-phone-btn'); const verifyMsg = $('#verification-message');
-  const signInSection = $('#sign-in-section'); const verificationSection = $('#verification-section');
 
   // Mask while typing
   if (phoneInput) {
@@ -243,7 +241,8 @@ window.addEventListener('DOMContentLoaded', () => {
     authMsg.textContent = ''; sendBtn.disabled = true;
     try {
       await sendCode(phoneInput.value);
-      verificationSection.classList.remove('hidden'); codeInput?.focus();
+      document.getElementById('verification-section').classList.remove('hidden'); 
+      codeInput?.focus();
       authMsg.textContent = 'Code sent. Please check your SMS.'; authMsg.style.color = '#065f46';
     } catch (e) {
       authMsg.textContent = e.message || 'Failed to send code.'; authMsg.style.color = '#b91c1c';
@@ -255,12 +254,29 @@ window.addEventListener('DOMContentLoaded', () => {
     verifyMsg.textContent = ''; verifyBtn.disabled = true;
     try {
       await verifyCode(codeInput.value);
-      verifyMsg.textContent = 'Phone verified! You can now reserve seats.'; verifyMsg.style.color = '#065f46';
-      signInSection.classList.add('hidden');
 
-      // Reveal main UI
-      setHidden($('#auth-container'), true);
-      await loadSeats(); showSignedInHeader();
+      // Determine if organizer
+      const u = auth.currentUser;
+      state.organizer = !!(u && u.phoneNumber === ALLOWED_PHONE);
+
+      showSignedInHeader();
+      if (!state.organizer) {
+        setHidden(document.getElementById('notice-container'), false);
+        setHidden(document.getElementById('auth-container'), false);
+        document.getElementById('auth-message').textContent = '';
+        document.getElementById('verification-message').textContent = '';
+        setHidden(document.getElementById('seat-area'), true);
+        setHidden(document.getElementById('summary'), true);
+        verifyMsg.textContent = 'To reserve seats, please call (650) 418-5241.'; 
+        verifyMsg.style.color = '#065f46';
+        return;
+      }
+
+      // Organizer can proceed
+      verifyMsg.textContent = 'Organizer verified! You can now reserve unlimited seats.'; verifyMsg.style.color = '#065f46';
+      document.getElementById('sign-in-section').classList.add('hidden');
+      setHidden(document.getElementById('auth-container'), true);
+      await loadSeats();
     } catch (e) {
       const msg = String(e && e.message || e || '');
       verifyMsg.textContent = /code-expired/i.test(msg)
@@ -272,9 +288,19 @@ window.addEventListener('DOMContentLoaded', () => {
     } finally { verifyBtn.disabled = false; }
   });
 
-  // Already signed in? Show seats
+  // Already signed in? Evaluate role and UI
   auth.onAuthStateChanged(async (u) => {
-    if (u) { setHidden($('#auth-container'), true); showSignedInHeader(); await loadSeats(); }
+    if (u) {
+      state.organizer = u.phoneNumber === ALLOWED_PHONE;
+      if (state.organizer) { setHidden($('#auth-container'), true); await loadSeats(); }
+      else {
+        setHidden($('#notice-container'), false);
+        setHidden($('#auth-container'), false);
+        setHidden($('#seat-area'), true);
+        setHidden($('#summary'), true);
+      }
+      showSignedInHeader();
+    }
   });
 
   // Summary actions

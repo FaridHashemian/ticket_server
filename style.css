@@ -38,6 +38,8 @@ input[type=email],input[type=text],input[type=tel]{width:100%;padding:10px;borde
 .primary-btn:disabled{opacity:.6;cursor:not-allowed}
 .secondary-btn{background:#e5e7eb;color:#374151}
 
+#notice-container p{margin-top:6px}
+
 .auth-message{color:#b91c1c;margin-top:8px;min-height:20px}
 .hidden{display:none!important}
 
@@ -50,7 +52,6 @@ input[type=email],input[type=text],input[type=tel]{width:100%;padding:10px;borde
 .seat-map{
   display:grid;grid-template-columns:repeat(25,1fr);gap:6px;background:#fff;border:1px solid #e5e7eb;border-radius:0 0 8px 8px;padding:12px;align-self:start
 }
-/* Single color for all seats */
 .seat{padding:8px 0;text-align:center;border:1px solid #c7d2fe;border-radius:6px;user-select:none;background:#eff6ff}
 .seat.selected{outline:2px solid #2563eb}
 .seat.sold{background:#d1d5db;color:#6b7280;border-color:#cbd5e1;cursor:not-allowed}
