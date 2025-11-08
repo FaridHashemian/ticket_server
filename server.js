@@ -106,6 +106,12 @@ async function createReceiptPDF(order) {
 }
 
 // ---------- Utilities ----------
+function makeOrderId(){
+  // Max length 10 to fit varchar(10). Format: R + 8 base36 chars
+  const part = (Date.now().toString(36) + Math.random().toString(36).slice(2,6)).upperCase?.() || (Date.now().toString(36) + Math.random().toString(36).slice(2,6)).toUpperCase();
+  return ('R' + part).slice(0,10);
+}
+
 function parseBody(req) {
   return new Promise(resolve => {
     let data = '';
@@ -181,7 +187,7 @@ const server = http.createServer(async (req, res) => {
       if (!seats.length) return sendJSON(res, 400, { error: 'No seats selected' });
       if (!isOrganizer && seats.length > 2) return sendJSON(res, 403, { error: 'You can reserve up to 2 seats online. For more, please call (650) 418-5241.' });
 
-      const orderId = 'R' + Date.now();
+      const orderId = makeOrderId();
       await pool.query('INSERT INTO purchases (order_id, phone, email) VALUES ($1,$2,$3)', [orderId, phone, email]);
       for (const s of seats) {
         await pool.query('UPDATE seats SET status=$1 WHERE seat_id=$2', ['sold', s]);
