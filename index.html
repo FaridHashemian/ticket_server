@@ -8,16 +8,14 @@
   <link rel="preload" as="image" href="/logo.gif" />
   <link rel="stylesheet" href="style.css" />
 
-  <!-- If your API is on a separate domain, keep this HTTPS URL. 
-       If you proxy /api on the same domain, you may REMOVE this tag. -->
-  <meta name="api-base" content="https://api.isaconcertticket.com">
+  <!-- Use same-origin /api. Remove external api-base to avoid CORS/404 issues. -->
+  <!-- <meta name="api-base" content="https://api.isaconcertticket.com"> -->
 
   <!-- Firebase (compat) must load before script.js -->
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
 </head>
 <body>
-  <!-- 2s splash (silent) -->
   <div id="splash" aria-hidden="true">
     <img src="/logo.gif" alt="Event logo" />
   </div>
@@ -36,7 +34,6 @@
 
   <main class="site-main">
     <div id="auth-container" class="auth-container">
-      <!-- Phone-only sign in -->
       <div id="recaptcha-container" style="min-height:1px"></div>
       <div id="sign-in-section" class="auth-section">
         <h2>Sign In</h2>
@@ -69,6 +66,7 @@
     <div id="seat-area" class="hidden">
       <div class="stage">STAGE</div>
       <div id="seat-map" class="seat-map"></div>
+      <p id="seat-error" class="auth-message hidden"></p>
     </div>
     
     <aside id="summary" class="summary hidden">
@@ -81,7 +79,6 @@
     </aside>
   </main>
 
-  <!-- Step 2: Guest names + receipt email + affiliation -->
   <div id="guest-modal" class="modal hidden" role="dialog" aria-hidden="true">
     <div class="modal-content">
       <h2>Guest Details</h2>
@@ -105,7 +102,6 @@
     </div>
   </div>
 
-  <!-- Step 3: Confirm -->
   <div id="checkout-modal" class="modal hidden" role="dialog" aria-hidden="true">
     <div class="modal-content">
       <h2>Confirm Reservation</h2>
@@ -121,7 +117,6 @@
     <p>&copy; 2025 Concert Organizer</p>
   </footer>
 
-  <!-- Load app last (only once) -->
   <script src="script.js"></script>
 </body>
 </html>

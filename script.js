@@ -1,8 +1,7 @@
 // script.js — Organizer-only booking (unlimited); others see phone notice
-// Organizer phone (E.164): +1 650-418-5241
 const ALLOWED_PHONE = "+16504185241";
 
-// --- Firebase Web config (your project) ---
+// --- Firebase Web config ---
 const firebaseConfig = {
   apiKey:        "AIzaSyC8_5PgpJKAj8RslYPC8U3roGvSTGKvapQ",
   authDomain:    "ticketwebsite-4d214.firebaseapp.com",
@@ -11,29 +10,16 @@ const firebaseConfig = {
   messagingSenderId: "703462470857"
 };
 
-// Resolve API base with failover: meta → same-origin
+// Always use same-origin /api to avoid CORS/404 due to external meta
 function resolveApiBase() {
-  const meta = document.querySelector('meta[name="api-base"]')?.content || '';
-  const cleanMeta = meta && /^https?:\/\//i.test(meta) ? meta.replace(/\/+$/,'') : '';
   const sameOrigin = window.location.origin.replace(/\/+$/,'');
-  return { primary: cleanMeta ? cleanMeta + '/api' : sameOrigin + '/api', fallback: sameOrigin + '/api' };
+  return { primary: sameOrigin + '/api', fallback: sameOrigin + '/api' };
 }
 const API_URLS = resolveApiBase();
 
 async function apiFetch(path, opts = {}) {
-  const url1 = `${API_URLS.primary}${path}`;
-  try {
-    const r1 = await fetch(url1, opts);
-    if ([502,503,504,521,522].includes(r1.status) && API_URLS.primary !== API_URLS.fallback) {
-      const url2 = `${API_URLS.fallback}${path}`;
-      try { return await fetch(url2, opts); } catch {}
-    }
-    return r1;
-  } catch {
-    const url2 = `${API_URLS.fallback}${path}`;
-    if (API_URLS.primary !== API_URLS.fallback) return fetch(url2, opts);
-    throw new Error('Network error');
-  }
+  const url = `${API_URLS.primary}${path}`;
+  return fetch(url, opts);
 }
 
 // Initialize Firebase
@@ -46,7 +32,6 @@ async function getIdToken() {
   return user ? user.getIdToken(true) : null;
 }
 
-// phone input mask → (xxx) xxx-xxxx
 function formatPhoneMask(raw) {
   const d = String(raw || '').replace(/\D/g, '').slice(0, 10);
   const a = d.slice(0, 3), b = d.slice(3, 6), c = d.slice(6, 10);
@@ -56,7 +41,6 @@ function formatPhoneMask(raw) {
   return '';
 }
 
-// reCAPTCHA
 let recaptchaVerifier = null;
 function setupRecaptcha(containerId = 'recaptcha-container') {
   try { recaptchaVerifier?.clear(); } catch {}
@@ -64,7 +48,6 @@ function setupRecaptcha(containerId = 'recaptcha-container') {
   recaptchaVerifier.render();
 }
 
-// Send SMS via Firebase
 async function sendCode(phoneRaw) {
   const digits = String(phoneRaw || '').replace(/\D/g, '').slice(0, 10);
   if (digits.length !== 10) throw new Error('Please enter a valid 10-digit US number.');
@@ -74,17 +57,14 @@ async function sendCode(phoneRaw) {
   return true;
 }
 
-// Verify the 6-digit code
 async function verifyCode(codeRaw) {
   const conf = window._confirmationResult;
   if (!conf) throw new Error('No code request pending. Tap “Send Code” again.');
   const code = String(codeRaw || '').trim();
   if (!/^\d{6}$/.test(code)) throw new Error('Enter the 6-digit code.');
 
-  // Confirm with Firebase (client-side)
   await conf.confirm(code);
 
-  // Notify server so it marks phone "verified"
   const idToken = await getIdToken();
   const res = await apiFetch('/verify_phone', {
     method: 'POST',
@@ -100,7 +80,6 @@ async function verifyCode(codeRaw) {
   return true;
 }
 
-// Purchase seats
 async function purchaseSeats({ seats, guests, email, affiliation }) {
   const idToken = await getIdToken();
   if (!idToken) throw new Error('Please verify your phone first.');
@@ -116,8 +95,6 @@ async function purchaseSeats({ seats, guests, email, affiliation }) {
 }
 
 /* ------------------------- Seat rendering + UI ------------------------- */
-
-// Convert 'A1' -> 'A01', keep original id for API
 function formatSeatLabel(id){
   if(!id) return '';
   const m = String(id).match(/^([A-Za-z]+)(\d+)$/);
@@ -126,8 +103,6 @@ function formatSeatLabel(id){
   const num = String(parseInt(m[2],10)).padStart(2,'0');
   return row + num;
 }
-
-// Sort seats by row letter(s) then numeric index
 function seatCompare(a,b){
   const ra = String(a.id).match(/^([A-Za-z]+)(\d+)$/) || [];
   const rb = String(b.id).match(/^([A-Za-z]+)(\d+)$/) || [];
@@ -139,7 +114,6 @@ function seatCompare(a,b){
   const nb = parseInt(rb[2]||'0',10);
   return na - nb;
 }
-
 
 const state = { seats: [], selected: new Set(), organizer: false };
 const $ = s => document.querySelector(s);
@@ -167,7 +141,7 @@ function renderSeatMap() {
         else {
           if (!state.organizer && state.selected.size >= 2) { alert('You can select up to 2 seats online.'); return; }
           state.selected.add(seat.id);
-        } // organizer unlimited; others capped at 2
+        }
         renderSeatMap(); updateSummary();
       });
     }
@@ -185,12 +159,22 @@ function updateSummary() {
 }
 
 async function loadSeats() {
-  const res = await apiFetch('/seats');
-  const j = await res.json();
-  state.seats = Array.isArray(j.seats) ? j.seats.sort(seatCompare) : [];
-  renderSeatMap();
-  setHidden($('#seat-area'), false);
-  setHidden($('#summary'), false);
+  const seatArea = $('#seat-area');
+  const seatErr = $('#seat-error');
+  try {
+    const res = await apiFetch('/seats');
+    if (!res.ok) throw new Error(`Seat API error (${res.status})`);
+    const j = await res.json();
+    state.seats = Array.isArray(j.seats) ? j.seats.sort(seatCompare) : [];
+    renderSeatMap();
+    setHidden(seatArea, false);
+    setHidden($('#summary'), false);
+    setHidden(seatErr, true);
+  } catch (e) {
+    setHidden(seatArea, false);
+    seatErr.textContent = (e && e.message) ? e.message : 'Failed to load seats.';
+    setHidden(seatErr, false);
+  }
 }
 
 function showSignedInHeader() {
@@ -201,14 +185,12 @@ function showSignedInHeader() {
   setHidden(info, !u);
 }
 
-// Clean sign-out + reset
 async function signOutFlow() {
   try { await auth.signOut(); } catch {}
   window._confirmationResult = null;
   try { recaptchaVerifier?.clear(); } catch {}
   setupRecaptcha('recaptcha-container');
 
-  // reset UI
   state.selected.clear(); updateSummary();
   const phoneInput = $('#phone-input'), codeInput = $('#code-input');
   if (phoneInput) phoneInput.value = '';
@@ -231,7 +213,6 @@ async function signOutFlow() {
   setHidden($('#notice-container'), true);
 }
 
-// Guest modal handlers
 function openGuestModal() {
   const namesBox = $('#guest-names'); const emailInput = $('#receipt-email');
   namesBox.innerHTML = '';
@@ -248,14 +229,12 @@ const closeGuestModal = () => setHidden($('#guest-modal'), true);
 function openConfirmModal(seatIds){ $('#summary-seats').textContent = `Seats: ${seatIds.map(formatSeatLabel).join(', ')}`; setHidden($('#checkout-modal'), false); }
 const closeConfirmModal = () => setHidden($('#checkout-modal'), true);
 
-/* --------------------------- Wire up the DOM --------------------------- */
 window.addEventListener('DOMContentLoaded', () => {
   setupRecaptcha('recaptcha-container');
 
   const phoneInput = $('#phone-input'); const sendBtn = $('#login-phone-btn'); const authMsg = $('#auth-message');
   const codeInput  = $('#code-input');  const verifyBtn = $('#verify-phone-btn'); const verifyMsg = $('#verification-message');
 
-  // Mask while typing
   if (phoneInput) {
     phoneInput.setAttribute('maxlength', '14');
     const mask = () => {
@@ -267,7 +246,6 @@ window.addEventListener('DOMContentLoaded', () => {
     phoneInput.addEventListener('paste', () => setTimeout(mask, 0));
   }
 
-  // Send Code
   sendBtn?.addEventListener('click', async () => {
     authMsg.textContent = ''; sendBtn.disabled = true;
     try {
@@ -280,19 +258,17 @@ window.addEventListener('DOMContentLoaded', () => {
     } finally { sendBtn.disabled = false; }
   });
 
-  // Verify Code
   verifyBtn?.addEventListener('click', async () => {
     verifyMsg.textContent = ''; verifyBtn.disabled = true;
     try {
       await verifyCode(codeInput.value);
 
-      // Determine if organizer
       const u = auth.currentUser;
       state.organizer = !!(u && u.phoneNumber === ALLOWED_PHONE);
 
       showSignedInHeader();
-      // Both organizer and others can proceed; organizer has unlimited seats
-      verifyMsg.textContent = state.organizer ? 'Organizer verified! You can now reserve unlimited seats.' : 'Signed in. You can reserve up to 2 seats online.'; verifyMsg.style.color = '#065f46';
+      verifyMsg.textContent = state.organizer ? 'Organizer verified! You can now reserve unlimited seats.' : 'Signed in. You can reserve up to 2 seats online.'; 
+      verifyMsg.style.color = '#065f46';
       document.getElementById('sign-in-section').classList.add('hidden');
       setHidden(document.getElementById('auth-container'), true);
       await loadSeats();
@@ -300,14 +276,11 @@ window.addEventListener('DOMContentLoaded', () => {
       const msg = String(e && e.message || e || '');
       verifyMsg.textContent = /code-expired/i.test(msg)
         ? 'The SMS code expired. Please re-send the code and try again.'
-        : (/Failed to fetch/i.test(msg)
-            ? 'Network error contacting the server. If your API is on a different domain, confirm the meta api-base URL or proxy /api on the same domain.'
-            : (msg || 'Verification failed.'));
+        : (msg || 'Verification failed.');
       verifyMsg.style.color = '#b91c1c';
     } finally { verifyBtn.disabled = false; }
   });
 
-  // Already signed in? Evaluate role and UI
   auth.onAuthStateChanged(async (u) => {
     if (u) {
       state.organizer = u.phoneNumber === ALLOWED_PHONE;
@@ -317,7 +290,6 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Summary actions
   $('#checkout-btn')?.addEventListener('click', () => { if (state.selected.size) openGuestModal(); });
   $('#guest-cancel-btn')?.addEventListener('click', closeGuestModal);
 
@@ -344,6 +316,5 @@ window.addEventListener('DOMContentLoaded', () => {
     } catch (e) { alert(e.message || 'Reservation failed.'); }
   });
 
-  // Header sign-out
   $('#signout-btn')?.addEventListener('click', signOutFlow);
 });
