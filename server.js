@@ -15,7 +15,7 @@ const admin = require('firebase-admin');
 const ALLOWED_PHONE = process.env.ALLOWED_PHONE || '+16504185241'; // Organizer
 const PUBLIC_BASE = process.env.PUBLIC_BASE || 'https://isaconcertticket.com';
 const SHOW_TIME = process.env.SHOW_TIME || 'November 22, 2025, 7:00 PM – 8:30 PM';
-const LOGO_PATH = path.join(__dirname, 'assets', 'logo.png');
+const LOGO_PATH = process.env.LOGO_PATH || path.join(__dirname, 'assets', 'logo.png');
 
 // ---------- Firebase ----------
 const serviceAccountPath = path.join(__dirname, 'firebase-service-account.json');
@@ -84,7 +84,10 @@ async function createReceiptPDF(order) {
   const stream = fs.createWriteStream(filePath);
   doc.pipe(stream);
 
-  if (fs.existsSync(LOGO_PATH)) doc.image(LOGO_PATH, 50, 50, { width: 80 });
+  if (fs.existsSync(LOGO_PATH)) {
+    try { doc.image(LOGO_PATH, 50, 50, { width: 80 }); }
+    catch(e){ console.warn('⚠️ Logo not embedded:', e && e.message || e); }
+  }
 
   doc.fontSize(22).text('Concert Ticket Receipt', 150, 50);
   doc.fontSize(11).text(`Order #: ${order.orderId}`);

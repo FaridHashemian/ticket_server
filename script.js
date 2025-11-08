@@ -202,8 +202,8 @@ function showSignedInHeader() {
 }
 
 // Clean sign-out + reset
-function signOutFlow() {
-  auth.signOut().catch(()=>{});
+async function signOutFlow() {
+  try { await auth.signOut(); } catch {}
   window._confirmationResult = null;
   try { recaptchaVerifier?.clear(); } catch {}
   setupRecaptcha('recaptcha-container');
@@ -214,6 +214,10 @@ function signOutFlow() {
   if (phoneInput) phoneInput.value = '';
   if (codeInput)   codeInput.value   = '';
   $('#auth-message').textContent = '';
+  const userInfo = $('#user-info'); const userPhone = $('#user-phone');
+  if (userInfo) userInfo.classList.add('hidden');
+  if (userPhone) userPhone.textContent = '';
+  const sendBtnEl = document.getElementById('login-phone-btn'); if (sendBtnEl) sendBtnEl.disabled = false;
   $('#verification-message').textContent = '';
 
   const signInSection = $('#sign-in-section');
