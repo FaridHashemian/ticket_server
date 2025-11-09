@@ -1,6 +1,6 @@
-// server.js — Seats + phone auth, SendGrid SMTP, PDF receipt from PPTX (LibreOffice), and diagnostics
+// server.js — ISA Ticket Server (Node + Postgres + SendGrid). Matches PG schema in studio_results_20251109_0323.csv
 
-require('dotenv').config(); // ← load .env when running outside systemd
+require('dotenv').config();
 
 const http = require('http');
 const fs = require('fs');
@@ -13,11 +13,11 @@ const { spawn } = require('child_process');
 const tmp = require('tmp');
 
 // ---------- Config ----------
-const ALLOWED_PHONE = process.env.ALLOWED_PHONE || '+16504185241'; // Organizer (unlimited)
+const ALLOWED_PHONE = process.env.ALLOWED_PHONE || '+16504185241'; // organizer unlimited
 const PUBLIC_BASE = process.env.PUBLIC_BASE || 'https://isaconcertticket.com';
 const SHOW_TIME = process.env.SHOW_TIME || 'November 22, 2025, 7:00 PM – 8:30 PM';
-const LOGO_PATH = process.env.LOGO_PATH || path.join(__dirname, 'assets', 'logo.png'); // optional (for legacy PDF)
-const PPTX_TEMPLATE = process.env.PPTX_TEMPLATE; // optional but recommended
+const LOGO_PATH = process.env.LOGO_PATH || path.join(__dirname, 'assets', 'logo.png');
+const PPTX_TEMPLATE = process.env.PPTX_TEMPLATE; // e.g., /srv/ticket_server/templates/marjan.pptx
 
 // ---------- Firebase ----------
 const serviceAccountPath =
@@ -30,11 +30,11 @@ if (serviceAccount && !admin.apps.length) {
   admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 } else if (!serviceAccount) {
   console.warn('⚠️ FIREBASE SERVICE ACCOUNT not found at', serviceAccountPath,
-               '— phone verification webhook (/api/verify_phone) will fail.');
+               '— /api/verify_phone will fail.');
 }
 
 // ---------- PostgreSQL ----------
-const pool = new Pool(); // Uses PG* env vars from .env
+const pool = new Pool(); // uses PG* env vars
 
 // ---------- Email ----------
 function buildTransport() {
@@ -79,7 +79,7 @@ async function getAuthedPhone(req) {
     const token = (req.headers.authorization || '').split(' ')[1];
     if (!token) return null;
     const decoded = await admin.auth().verifyIdToken(token);
-    return decoded.phone_number || null;
+    return decoded.phone_number || null; // E.164
   } catch { return null; }
 }
 
@@ -105,8 +105,6 @@ async function createReceiptPDFfromPPTX(order) {
   if (!PPTX_TEMPLATE || !fs.existsSync(PPTX_TEMPLATE)) {
     throw new Error('PPTX template not found. Set PPTX_TEMPLATE in .env');
   }
-
-  // lazy import pptx-templates so the server can still run if it is missing
   let createReport;
   try {
     ({ default: createReport } = require('pptx-templates'));
@@ -115,7 +113,7 @@ async function createReceiptPDFfromPPTX(order) {
   }
 
   const url = `${PUBLIC_BASE}/validate.html?orderId=${order.orderId}`;
-  const qrPng = await require('qrcode').toBuffer(url, { margin: 1, width: 600 });
+  const qrPng = await QRCode.toBuffer(url, { margin: 1, width: 600 });
 
   const data = {
     reservationNumber: order.orderId,
@@ -138,8 +136,8 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.url === '/api/health') return sendJSON(res, 200, { ok: true });
 
+    // Seats list for UI
     if (req.url === '/api/seats' && req.method === 'GET') {
-      // ✅ Postgres seat sort: row letters, then numeric index
       const { rows } = await pool.query(
         "SELECT seat_id, status FROM seats " +
         "ORDER BY UPPER(REGEXP_REPLACE(seat_id,'[^A-Za-z]+.*$',''))," +
@@ -148,43 +146,51 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, { seats: rows.map(r => ({ id: r.seat_id, status: r.status })) });
     }
 
+    // Validate page (by order id)
     if (req.url.startsWith('/api/validate') && req.method === 'GET') {
       const u = new URL(req.url, 'http://x');
       const orderId = u.searchParams.get('orderId') || '';
       if (!orderId) return sendJSON(res, 400, { ok: false, error: 'Missing orderId' });
+
+      // pull order + guest names from purchase_seats only (no purchase_guests table)
       const r = await pool.query(
-        "SELECT p.order_id, p.email, s.seat_id, g.guest_name " +
+        "SELECT p.order_id, p.email, ps.seat_id, ps.guest_name " +
         "FROM purchases p " +
-        "LEFT JOIN purchase_seats s ON s.order_id = p.order_id " +
-        "LEFT JOIN purchase_guests g ON g.order_id = p.order_id AND g.seat_id = s.seat_id " +
+        "LEFT JOIN purchase_seats ps ON ps.order_id = p.order_id " +
         "WHERE p.order_id = $1",
         [orderId]
       );
       if (!r.rows.length) return sendJSON(res, 404, { ok: false, error: 'Not found' });
+
       const seats = [...new Set(r.rows.map(x => x.seat_id).filter(Boolean))];
-      const guests = r.rows.filter(x => x.guest_name && x.seat_id)
-                           .map(x => ({ name: x.guest_name, seat: x.seat_id }));
+      const guests = r.rows
+        .filter(x => x.guest_name && x.seat_id)
+        .map(x => ({ name: x.guest_name, seat: x.seat_id }));
+
       return sendJSON(res, 200, { ok: true, orderId, seats, guests });
     }
 
+    // Phone verify webhook — stores 10-digit phone in users
     if (req.url === '/api/verify_phone' && req.method === 'POST') {
       const body = await parseBody(req);
       const decoded = await admin.auth().verifyIdToken(body.idToken);
-      const phone = decoded.phone_number;
-      const digits = String(phone || '').replace(/\D/g, '').slice(-10);
+      const phone = decoded.phone_number; // E.164
+      const digits = String(phone || '').replace(/\D/g, '').slice(-10); // varchar(10)
       await pool.query(
-        'INSERT INTO users (phone, verified) VALUES ($1, true) ON CONFLICT (phone) DO UPDATE SET verified=true',
+        'INSERT INTO users (phone, verified) VALUES ($1, true) ' +
+        'ON CONFLICT (phone) DO UPDATE SET verified = true',
         [digits]
       );
       return sendJSON(res, 200, { ok: true });
     }
 
+    // Purchase
     if (req.url === '/api/purchase' && req.method === 'POST') {
-      const phone = await getAuthedPhone(req);
+      const phone = await getAuthedPhone(req); // E.164 like +16504185241
       if (!phone) return sendJSON(res, 401, { error: 'Unauthorized' });
 
       const body = await parseBody(req);
-      const seats = Array.isArray(body.seats) ? body.seats : [];
+      const seats = Array.isArray(body.seats) ? body.seats.map(String) : [];
       const guests = Array.isArray(body.guests) ? body.guests : [];
       const email = String(body.email || '').trim();
       let affiliation = String(body.affiliation || 'none').toLowerCase();
@@ -195,33 +201,38 @@ const server = http.createServer(async (req, res) => {
 
       const isOrganizer = phone === ALLOWED_PHONE;
       if (!isOrganizer && seats.length > 2) {
-        return sendJSON(res, 403, { error: 'You can reserve up to 2 seats online.' });
+        return sendJSON(res, 403, { error: 'You may reserve up to 2 seats online.' });
       }
 
       const orderId = makeOrderId();
-      const phoneDigits = String(phone || '').replace(/\D/g, '').slice(-10);
-      // basic writes (adjust to your real schema as needed)
+      const phoneDigits = String(phone).replace(/\D/g, '').slice(-10); // purchases.phone varchar(10)
+
+      // 1) purchases
       await pool.query(
-      'INSERT INTO purchases (order_id, phone, email, affiliation) VALUES ($1,$2,$3,$4)',
-      [orderId, phoneDigits, email, affiliation]
+        'INSERT INTO purchases (order_id, phone, email, affiliation) VALUES ($1,$2,$3,$4)',
+        [orderId, phoneDigits, email, affiliation]
       );
 
+      // map guest name by seat for NOT NULL purchase_seats.guest_name
+      const guestBySeat = new Map(
+        (guests || []).map(g => [String(g.seat), String(g.name || '').trim()])
+      );
+
+      // 2) seats + purchase_seats
       for (const sId of seats) {
-        await pool.query('UPDATE seats SET status=$1 WHERE seat_id=$2', ['sold', sId]);
+        // seats.status
+        await pool.query('UPDATE seats SET status = $1 WHERE seat_id = $2', ['sold', sId]);
+
+        // purchase_seats requires guest_name NOT NULL
+        const gname = guestBySeat.get(sId) || 'Guest';
         await pool.query(
-        'INSERT INTO purchase_seats (order_id, seat_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
-        [orderId, sId]
+          'INSERT INTO purchase_seats (order_id, seat_id, guest_name) VALUES ($1,$2,$3) ' +
+          'ON CONFLICT DO NOTHING',
+          [orderId, sId, gname]
         );
       }
 
-      for (const g of guests) {
-        await pool.query(
-        'INSERT INTO purchase_guests (order_id, seat_id, guest_name) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
-        [orderId, g.seat, g.name]
-        );
-      }
-
-      // Try to build PDF; if tooling missing, still send a plain email
+      // Build & send receipt (best-effort)
       let attachments = [];
       try {
         const pdfBuffer = await createReceiptPDFfromPPTX({ orderId, seats, guests, email, affiliation });
@@ -232,13 +243,17 @@ const server = http.createServer(async (req, res) => {
         console.warn('⚠️ Receipt PDF not attached:', e.message);
       }
 
-      await sendEmail(email, 'Your Concert Ticket Receipt',
-        `Reservation confirmed.\nOrder ID: ${orderId}\nSeats: ${seats.join(', ')}\nTime: ${SHOW_TIME}`, attachments);
+      await sendEmail(
+        email,
+        'Your Concert Ticket Receipt',
+        `Reservation confirmed.\nOrder ID: ${orderId}\nSeats: ${seats.join(', ')}\nTime: ${SHOW_TIME}`,
+        attachments
+      );
 
       return sendJSON(res, 200, { ok: true, orderId });
     }
 
-    // Test mail endpoint (GET /api/test_mail?to=you@example.com)
+    // SMTP test
     if (req.url.startsWith('/api/test_mail') && req.method === 'GET') {
       const u = new URL(req.url, 'http://x');
       const to = u.searchParams.get('to');
@@ -250,7 +265,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // Serve static
+    // Static files
     if (req.url === '/' || req.url.endsWith('.html') || req.url.endsWith('.css') || req.url.endsWith('.js')) {
       const fp = path.join(__dirname, req.url === '/' ? 'index.html' : req.url);
       const ext = path.extname(fp);
