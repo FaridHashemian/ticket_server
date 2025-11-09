@@ -1,4 +1,5 @@
-// ISA Ticket Server — ACID purchases + SendGrid + STRICT PPTX->PDF receipts (docxtemplater)
+// server.js — ISA Ticket Server (Node + Postgres + SendGrid) with ACID purchases,
+// resilient email, and always-attach PDF (PPTX->PDF with PDFKit fallback)
 
 require('dotenv').config();
 
@@ -12,15 +13,11 @@ const admin = require('firebase-admin');
 const { spawn } = require('child_process');
 const tmp = require('tmp');
 
-// PPTX templating
-const PizZip = require('pizzip');
-const Docxtemplater = require('docxtemplater');
-
 // ---------- Config ----------
 const ALLOWED_PHONE = process.env.ALLOWED_PHONE || '+16504185241';
 const PUBLIC_BASE   = process.env.PUBLIC_BASE || 'https://isaconcertticket.com';
 const SHOW_TIME     = process.env.SHOW_TIME   || 'November 22, 2025, 7:00 PM – 8:30 PM';
-const PPTX_TEMPLATE = process.env.PPTX_TEMPLATE || path.join(__dirname, 'templates', 'marjan.pptx');
+const PPTX_TEMPLATE = process.env.PPTX_TEMPLATE; // e.g., /srv/ticket_server/templates/marjan.pptx
 
 // ---------- Firebase ----------
 const saPath = process.env.FIREBASE_SA_PATH || path.join(__dirname, 'firebase-service-account.json');
@@ -88,59 +85,97 @@ async function getAuthedPhone(req) {
   } catch { return null; }
 }
 
-// ---------- PPTX -> PDF (docxtemplater + soffice) ----------
-function renderPptxFromTemplate(bindings) {
-  if (!PPTX_TEMPLATE || !fs.existsSync(PPTX_TEMPLATE)) {
-    throw new Error('PPTX template not found. Check PPTX_TEMPLATE path and permissions.');
-  }
-  // load template
-  const content = fs.readFileSync(PPTX_TEMPLATE);
-  const zip = new PizZip(content);
-  const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
-  doc.setData(bindings);
-  try { doc.render(); }
-  catch (e) { throw new Error('PPTX render failed: ' + (e && e.message || e)); }
-  // produce pptx buffer
-  return doc.getZip().generate({ type: 'nodebuffer' });
-}
-
-async function convertPptxToPdfBuffer(pptxBuffer) {
-  // write pptx to tmp, call soffice --convert-to pdf, read pdf back as buffer
-  const tmpPptx = tmp.fileSync({ postfix: '.pptx' }).name;
-  fs.writeFileSync(tmpPptx, pptxBuffer);
-
+// ---------- PPTX → PDF (primary path) ----------
+async function convertPptxToPdfBuffer(pptxPath) {
   return new Promise((resolve, reject) => {
     const outdir = tmp.dirSync({ unsafeCleanup: true }).name;
     const soffice = spawn('soffice', [
       '--headless','--nologo','--nolockcheck','--nodefault','--nofirststartwizard',
-      '--convert-to','pdf','--outdir', outdir, tmpPptx
+      '--convert-to','pdf','--outdir', outdir, pptxPath
     ]);
     let stderr = '';
     soffice.stderr.on('data', d => { stderr += d.toString(); });
     soffice.on('close', (code) => {
       if (code !== 0) return reject(new Error(`LibreOffice failed (code ${code}): ${stderr || 'no stderr'}`));
-      const pdfPath = path.join(outdir, path.basename(tmpPptx, '.pptx') + '.pdf');
+      const pdfPath = path.join(outdir, path.basename(pptxPath, path.extname(pptxPath)) + '.pdf');
       try { resolve(fs.readFileSync(pdfPath)); } catch (e) { reject(e); }
     });
   });
 }
 
-async function buildReceiptPdfFromTemplate(order) {
-  // We can still generate a QR code image file if you later want to embed it.
-  // For now we pass a URL and rely on a text placeholder {{qrUrl}} in the PPTX.
-  const qrUrl = `${PUBLIC_BASE}/validate.html?orderId=${order.orderId}`;
+async function tryPptxPipeline(order) {
+  if (!PPTX_TEMPLATE || !fs.existsSync(PPTX_TEMPLATE)) {
+    throw new Error('PPTX template not found. Set PPTX_TEMPLATE in .env');
+  }
+  let createReport;
+  try { ({ default: createReport } = require('pptx-templates')); }
+  catch { throw new Error('pptx-templates is not installed. Run: npm i pptx-templates tmp'); }
 
-  const bindings = {
+  const url = `${PUBLIC_BASE}/validate.html?orderId=${order.orderId}`;
+  const qrPng = await QRCode.toBuffer(url, { margin: 1, width: 600 });
+
+  const data = {
     reservationNumber: order.orderId,
     reservationTime: SHOW_TIME,
     guestName: (order.guests && order.guests.length) ? order.guests[0].name : order.email,
     seatLabel: (order.seats && order.seats.length === 1) ? order.seats[0] : '',
     seatList: (order.seats || []).join(', '),
-    qrUrl
+    qr: { data: qrPng, extension: '.png' }
   };
 
-  const filledPptxBuf = renderPptxFromTemplate(bindings);
-  return await convertPptxToPdfBuffer(filledPptxBuf); // <Buffer> PDF
+  const templateBuffer = fs.readFileSync(PPTX_TEMPLATE);
+  const filledPptx = await createReport({ template: templateBuffer, data });
+  const tmpPptx = tmp.fileSync({ postfix: '.pptx' }).name;
+  fs.writeFileSync(tmpPptx, Buffer.from(filledPptx));
+  return await convertPptxToPdfBuffer(tmpPptx);
+}
+
+// ---------- PDFKit fallback (always available once installed) ----------
+async function buildPdfkitReceipt(order) {
+  let PDFDocument;
+  try { PDFDocument = require('pdfkit'); }
+  catch { throw new Error('pdfkit is not installed. Run: npm i pdfkit'); }
+
+  const doc = new PDFDocument({ size: 'LETTER', margin: 50 });
+  const chunks = [];
+  doc.on('data', d => chunks.push(d));
+  const done = new Promise(resolve => doc.on('end', () => resolve(Buffer.concat(chunks))));
+
+  // Header
+  doc.fontSize(20).text('ISA Concert Ticket Receipt', { align: 'center' }).moveDown(0.5);
+  doc.fontSize(12).text(SHOW_TIME, { align: 'center' }).moveDown(1);
+
+  // Order block
+  doc.fontSize(14).text(`Order ID: ${order.orderId}`);
+  doc.moveDown(0.25);
+  doc.fontSize(12).text(`Seats: ${order.seats.join(', ')}`);
+  doc.moveDown(0.25);
+  doc.text(`Email: ${order.email}`);
+  doc.moveDown(0.5);
+
+  // QR code
+  const url = `${PUBLIC_BASE}/validate.html?orderId=${order.orderId}`;
+  const qrPng = await QRCode.toBuffer(url, { margin: 1, width: 220 });
+  doc.image(qrPng, { fit: [220, 220], align: 'left' }).moveDown(1);
+
+  // Note
+  doc.fontSize(10).fillColor('#555').text(
+    'Please arrive 15 minutes early. Bring this receipt or the QR code for validation.',
+    { align: 'left' }
+  );
+
+  doc.end();
+  return await done;
+}
+
+// Build a receipt PDF buffer using PPTX if possible, otherwise PDFKit
+async function buildReceiptPdf(order) {
+  try {
+    return await tryPptxPipeline(order);
+  } catch (e) {
+    console.warn('⚠️ PPTX pipeline unavailable:', e.message);
+    return await buildPdfkitReceipt(order);
+  }
 }
 
 // ---------- API ----------
@@ -212,7 +247,7 @@ const server = http.createServer(async (req, res) => {
         return sendJSON(res, 403, { error: 'You may reserve up to 2 seats online.' });
       }
 
-      const orderId     = makeOrderId();
+      const orderId    = makeOrderId();
       const phoneDigits = String(phone).replace(/\D/g, '').slice(-10);
 
       // Prepare guest map (NOT NULL guest_name)
@@ -246,22 +281,22 @@ const server = http.createServer(async (req, res) => {
       }
       // --------- END TRANSACTION ----------
 
-      // Build receipt strictly from PPTX & send email AFTER COMMIT
+      // Build receipt (Buffer) and send email AFTER COMMIT
       let email_sent = false;
       try {
-        const pdfBuffer = await buildReceiptPdfFromTemplate({ orderId, seats, guests, email });
+        const pdfBuffer = await buildReceiptPdf({ orderId, seats, guests, email, affiliation });
         const result = await trySendEmail({
           to: email,
           subject: 'Your Concert Ticket Receipt',
           text: `Reservation confirmed.\nOrder ID: ${orderId}\nSeats: ${seats.join(', ')}\nTime: ${SHOW_TIME}`,
           attachments: [
-            { filename: 'receipt.pdf', content: pdfBuffer, contentType: 'application/pdf' }
+            { filename: 'receipt.pdf', content: pdfBuffer, contentType: 'application/pdf' } // ← attach from memory
           ]
         });
         email_sent = !!result.ok;
       } catch (e) {
-        console.warn('⚠️ Could not build/attach PPTX-based PDF:', e.message);
-        // still success for the order
+        console.warn('⚠️ Could not build or attach PDF:', e.message);
+        // we still consider the purchase successful
       }
 
       return sendJSON(res, 200, { ok: true, orderId, email_sent });
@@ -285,14 +320,14 @@ const server = http.createServer(async (req, res) => {
       const seats = r.rows[0].seats || [];
 
       try {
-        const pdfBuffer = await buildReceiptPdfFromTemplate({ orderId, seats, guests: [], email });
+        const pdfBuffer = await buildReceiptPdf({ orderId, seats, guests: [], email, affiliation: 'none' });
         const result = await trySendEmail({
           to: email,
           subject: 'Your Concert Ticket Receipt (Resent)',
           text: `Order ID: ${orderId}\nSeats: ${seats.join(', ')}\nTime: ${SHOW_TIME}`,
           attachments: [{ filename: 'receipt.pdf', content: pdfBuffer, contentType: 'application/pdf' }]
         });
-        return sendJSON(res, 200, { ok: true, email_sent: !!result.ok });
+        return sendJSON(res, 200, { ok: true, email_sent: !!result.ok, error: result.error || null });
       } catch (e) {
         return sendJSON(res, 500, { ok: false, error: e.message });
       }
