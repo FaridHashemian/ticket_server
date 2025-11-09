@@ -75,8 +75,6 @@ async function sendEmail(to, subject, text, attachments = []) {
 
 // ---------- Utilities ----------
 function makeOrderId() {
-  // Max 10 chars to fit varchar(10).
-  // Format: R + base36 timestamp chunk + random chunk (capped at 9 after 'R')
   const core = (Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).toUpperCase();
   return ('R' + core).slice(0, 10);
 }
@@ -159,7 +157,7 @@ async function createReceiptPDFfromPPTX(order) {
     guestName: (order.guests && order.guests.length) ? order.guests[0].name : order.email,
     seatLabel: (order.seats && order.seats.length === 1) ? order.seats[0] : '',
     seatList: (order.seats || []).join(', '),
-    qr: { data: qrPng, extension: '.png' } // replaces {{qr}} with image
+    qr: { data: qrPng, extension: '.png' }
   };
 
   const templateBuffer = fs.readFileSync(templatePath);
@@ -183,11 +181,11 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/api/health') return sendJSON(res, 200, { ok: true });
 
     if (req.url === '/api/seats' && req.method === 'GET') {
-      // Sort row (letters) then number
+      // ✅ FIX: Postgres has no \D shorthand; use [^0-9] with 'g' flag
       const { rows } = await pool.query(
         "SELECT * FROM seats " +
         "ORDER BY UPPER(REGEXP_REPLACE(seat_id,'[^A-Za-z]+.*$',''))," +
-        " (REGEXP_REPLACE(seat_id,'\\D','','g'))::int"
+        " (REGEXP_REPLACE(seat_id,'[^0-9]','','g'))::int"
       );
       const seats = rows.map(r => ({ id: r.seat_id, status: r.status }));
       return sendJSON(res, 200, { seats });
@@ -207,10 +205,10 @@ const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       const decoded = await admin.auth().verifyIdToken(body.idToken);
       const phone = decoded.phone_number;
-      const pk = phoneKey10(phone);
+      const digits = String(phone || '').replace(/\D/g, '').slice(-10);
       await pool.query(
         'INSERT INTO users (phone, verified) VALUES ($1, true) ON CONFLICT (phone) DO UPDATE SET verified=true',
-        [pk]
+        [digits]
       );
       return sendJSON(res, 200, { ok: true });
     }
@@ -234,8 +232,8 @@ const server = http.createServer(async (req, res) => {
         return sendJSON(res, 403, { error: 'You can reserve up to 2 seats online. For more, please call (650) 418-5241.' });
       }
 
-      const orderId = makeOrderId(); // ≤ 10 chars
-      const pk = phoneKey10(phone);
+      const orderId = makeOrderId();
+      const pk = String(phone || '').replace(/\D/g, '').slice(-10);
 
       await pool.query('INSERT INTO purchases (order_id, phone, email, affiliation) VALUES ($1,$2,$3,$4)',
         [orderId, pk, email, affiliation]
