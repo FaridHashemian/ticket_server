@@ -1,4 +1,5 @@
-// server.js — ISA Ticket Server (Node + Postgres + SendGrid) with ACID purchases + resilient email
+// server.js — ISA Ticket Server (Node + Postgres + SendGrid) with ACID purchases,
+// resilient email, and always-attach PDF (PPTX->PDF with PDFKit fallback)
 
 require('dotenv').config();
 
@@ -13,10 +14,9 @@ const { spawn } = require('child_process');
 const tmp = require('tmp');
 
 // ---------- Config ----------
-const ALLOWED_PHONE = process.env.ALLOWED_PHONE || '+16504185241'; // organizer unlimited
+const ALLOWED_PHONE = process.env.ALLOWED_PHONE || '+16504185241';
 const PUBLIC_BASE   = process.env.PUBLIC_BASE || 'https://isaconcertticket.com';
 const SHOW_TIME     = process.env.SHOW_TIME   || 'November 22, 2025, 7:00 PM – 8:30 PM';
-const LOGO_PATH     = process.env.LOGO_PATH   || path.join(__dirname, 'assets', 'logo.png');
 const PPTX_TEMPLATE = process.env.PPTX_TEMPLATE; // e.g., /srv/ticket_server/templates/marjan.pptx
 
 // ---------- Firebase ----------
@@ -55,7 +55,6 @@ async function trySendEmail({ to, subject, text, attachments }) {
     console.log(`✅ Email accepted by SMTP: ${info && info.messageId}`);
     return { ok: true };
   } catch (e) {
-    // Don’t fail the purchase for SMTP issues (like 451 credits exceeded)
     console.warn('⚠️ Email not sent:', e && e.message || e);
     return { ok: false, error: e && e.message || String(e) };
   }
@@ -86,7 +85,7 @@ async function getAuthedPhone(req) {
   } catch { return null; }
 }
 
-// ---------- PPTX → PDF ----------
+// ---------- PPTX → PDF (primary path) ----------
 async function convertPptxToPdfBuffer(pptxPath) {
   return new Promise((resolve, reject) => {
     const outdir = tmp.dirSync({ unsafeCleanup: true }).name;
@@ -104,7 +103,7 @@ async function convertPptxToPdfBuffer(pptxPath) {
   });
 }
 
-async function createReceiptPDFfromPPTX(order) {
+async function tryPptxPipeline(order) {
   if (!PPTX_TEMPLATE || !fs.existsSync(PPTX_TEMPLATE)) {
     throw new Error('PPTX template not found. Set PPTX_TEMPLATE in .env');
   }
@@ -129,6 +128,54 @@ async function createReceiptPDFfromPPTX(order) {
   const tmpPptx = tmp.fileSync({ postfix: '.pptx' }).name;
   fs.writeFileSync(tmpPptx, Buffer.from(filledPptx));
   return await convertPptxToPdfBuffer(tmpPptx);
+}
+
+// ---------- PDFKit fallback (always available once installed) ----------
+async function buildPdfkitReceipt(order) {
+  let PDFDocument;
+  try { PDFDocument = require('pdfkit'); }
+  catch { throw new Error('pdfkit is not installed. Run: npm i pdfkit'); }
+
+  const doc = new PDFDocument({ size: 'LETTER', margin: 50 });
+  const chunks = [];
+  doc.on('data', d => chunks.push(d));
+  const done = new Promise(resolve => doc.on('end', () => resolve(Buffer.concat(chunks))));
+
+  // Header
+  doc.fontSize(20).text('ISA Concert Ticket Receipt', { align: 'center' }).moveDown(0.5);
+  doc.fontSize(12).text(SHOW_TIME, { align: 'center' }).moveDown(1);
+
+  // Order block
+  doc.fontSize(14).text(`Order ID: ${order.orderId}`);
+  doc.moveDown(0.25);
+  doc.fontSize(12).text(`Seats: ${order.seats.join(', ')}`);
+  doc.moveDown(0.25);
+  doc.text(`Email: ${order.email}`);
+  doc.moveDown(0.5);
+
+  // QR code
+  const url = `${PUBLIC_BASE}/validate.html?orderId=${order.orderId}`;
+  const qrPng = await QRCode.toBuffer(url, { margin: 1, width: 220 });
+  doc.image(qrPng, { fit: [220, 220], align: 'left' }).moveDown(1);
+
+  // Note
+  doc.fontSize(10).fillColor('#555').text(
+    'Please arrive 15 minutes early. Bring this receipt or the QR code for validation.',
+    { align: 'left' }
+  );
+
+  doc.end();
+  return await done;
+}
+
+// Build a receipt PDF buffer using PPTX if possible, otherwise PDFKit
+async function buildReceiptPdf(order) {
+  try {
+    return await tryPptxPipeline(order);
+  } catch (e) {
+    console.warn('⚠️ PPTX pipeline unavailable:', e.message);
+    return await buildPdfkitReceipt(order);
+  }
 }
 
 // ---------- API ----------
@@ -206,19 +253,16 @@ const server = http.createServer(async (req, res) => {
       // Prepare guest map (NOT NULL guest_name)
       const guestBySeat = new Map((guests || []).map(g => [String(g.seat), String(g.name || '').trim()]));
 
-      // --------- TRANSACTION: ensure DB consistency ---------
+      // --------- TRANSACTION ----------
       const client = await pool.connect();
-      let committed = false;
       try {
         await client.query('BEGIN');
 
-        // purchases
         await client.query(
           'INSERT INTO purchases (order_id, phone, email, affiliation) VALUES ($1,$2,$3,$4)',
           [orderId, phoneDigits, email, affiliation]
         );
 
-        // seats + purchase_seats
         for (const sId of seats) {
           await client.query('UPDATE seats SET status = $1 WHERE seat_id = $2', ['sold', sId]);
           const gname = guestBySeat.get(sId) || 'Guest';
@@ -229,45 +273,36 @@ const server = http.createServer(async (req, res) => {
         }
 
         await client.query('COMMIT');
-        committed = true;
       } catch (txErr) {
         try { await client.query('ROLLBACK'); } catch {}
-        throw txErr; // will be caught by outer try/catch and returned as 500
+        throw txErr;
       } finally {
         client.release();
       }
-      // --------- END TRANSACTION ---------
+      // --------- END TRANSACTION ----------
 
-      // Try to build receipt & send email AFTER COMMIT (don’t block the order)
+      // Build receipt (Buffer) and send email AFTER COMMIT
       let email_sent = false;
       try {
-        // Build receipt (optional)
-        let attachments = [];
-        try {
-          const pdfBuffer = await createReceiptPDFfromPPTX({ orderId, seats, guests, email, affiliation });
-          const outDir = path.join(__dirname, 'receipts'); fs.mkdirSync(outDir, { recursive: true });
-          const outPath = path.join(outDir, `receipt_${orderId}.pdf`); fs.writeFileSync(outPath, pdfBuffer);
-          attachments.push({ filename: 'receipt.pdf', path: outPath });
-        } catch (e) {
-          console.warn('⚠️ Receipt PDF not attached:', e.message);
-        }
-
+        const pdfBuffer = await buildReceiptPdf({ orderId, seats, guests, email, affiliation });
         const result = await trySendEmail({
           to: email,
           subject: 'Your Concert Ticket Receipt',
           text: `Reservation confirmed.\nOrder ID: ${orderId}\nSeats: ${seats.join(', ')}\nTime: ${SHOW_TIME}`,
-          attachments
+          attachments: [
+            { filename: 'receipt.pdf', content: pdfBuffer, contentType: 'application/pdf' } // ← attach from memory
+          ]
         });
         email_sent = !!result.ok;
-      } catch (_) {
-        email_sent = false;
+      } catch (e) {
+        console.warn('⚠️ Could not build or attach PDF:', e.message);
+        // we still consider the purchase successful
       }
 
-      // Success regardless of SMTP credit issues
       return sendJSON(res, 200, { ok: true, orderId, email_sent });
     }
 
-    // Resend receipt (admin/ops helper): GET /api/resend_receipt?orderId=RABC123
+    // Resend receipt (ops helper)
     if (req.url.startsWith('/api/resend_receipt') && req.method === 'GET') {
       const u = new URL(req.url, 'http://x');
       const orderId = u.searchParams.get('orderId') || '';
@@ -284,22 +319,18 @@ const server = http.createServer(async (req, res) => {
       const email = r.rows[0].email;
       const seats = r.rows[0].seats || [];
 
-      let attachments = [];
       try {
-        const pdfBuffer = await createReceiptPDFfromPPTX({ orderId, seats, guests: [], email, affiliation: 'none' });
-        const outDir = path.join(__dirname, 'receipts'); fs.mkdirSync(outDir, { recursive: true });
-        const outPath = path.join(outDir, `receipt_${orderId}.pdf`); fs.writeFileSync(outPath, pdfBuffer);
-        attachments.push({ filename: 'receipt.pdf', path: outPath });
-      } catch (e) { console.warn('⚠️ Receipt PDF not attached:', e.message); }
-
-      const result = await trySendEmail({
-        to: email,
-        subject: 'Your Concert Ticket Receipt (Resent)',
-        text: `Order ID: ${orderId}\nSeats: ${seats.join(', ')}\nTime: ${SHOW_TIME}`,
-        attachments
-      });
-
-      return sendJSON(res, 200, { ok: true, email_sent: !!result.ok, error: result.error || null });
+        const pdfBuffer = await buildReceiptPdf({ orderId, seats, guests: [], email, affiliation: 'none' });
+        const result = await trySendEmail({
+          to: email,
+          subject: 'Your Concert Ticket Receipt (Resent)',
+          text: `Order ID: ${orderId}\nSeats: ${seats.join(', ')}\nTime: ${SHOW_TIME}`,
+          attachments: [{ filename: 'receipt.pdf', content: pdfBuffer, contentType: 'application/pdf' }]
+        });
+        return sendJSON(res, 200, { ok: true, email_sent: !!result.ok, error: result.error || null });
+      } catch (e) {
+        return sendJSON(res, 500, { ok: false, error: e.message });
+      }
     }
 
     // Static files
