@@ -195,22 +195,30 @@ const server = http.createServer(async (req, res) => {
 
       const isOrganizer = phone === ALLOWED_PHONE;
       if (!isOrganizer && seats.length > 2) {
-        return sendJSON(res, 403, { error: 'You can reserve up to 2 seats online. For more, please call (650) 418-5241.' });
+        return sendJSON(res, 403, { error: 'You can reserve up to 2 seats online.' });
       }
 
       const orderId = makeOrderId();
-
+      const phoneDigits = String(phone || '').replace(/\D/g, '').slice(-10);
       // basic writes (adjust to your real schema as needed)
-      await pool.query('INSERT INTO purchases (order_id, phone, email, affiliation) VALUES ($1,$2,$3,$4)',
-        [orderId, phone, email, affiliation]);
+      await pool.query(
+      'INSERT INTO purchases (order_id, phone, email, affiliation) VALUES ($1,$2,$3,$4)',
+      [orderId, phoneDigits, email, affiliation]
+      );
+
       for (const sId of seats) {
         await pool.query('UPDATE seats SET status=$1 WHERE seat_id=$2', ['sold', sId]);
-        await pool.query('INSERT INTO purchase_seats (order_id, seat_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
-          [orderId, sId]);
+        await pool.query(
+        'INSERT INTO purchase_seats (order_id, seat_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
+        [orderId, sId]
+        );
       }
+
       for (const g of guests) {
-        await pool.query('INSERT INTO purchase_guests (order_id, seat_id, guest_name) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
-          [orderId, g.seat, g.name]);
+        await pool.query(
+        'INSERT INTO purchase_guests (order_id, seat_id, guest_name) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+        [orderId, g.seat, g.name]
+        );
       }
 
       // Try to build PDF; if tooling missing, still send a plain email
