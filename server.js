@@ -1,4 +1,4 @@
-// server.js — ISA Ticket Server (Node + Postgres + SendGrid). Matches PG schema in studio_results_20251109_0323.csv
+// server.js — ISA Ticket Server (Node + Postgres + SendGrid) with ACID purchases + resilient email
 
 require('dotenv').config();
 
@@ -14,23 +14,19 @@ const tmp = require('tmp');
 
 // ---------- Config ----------
 const ALLOWED_PHONE = process.env.ALLOWED_PHONE || '+16504185241'; // organizer unlimited
-const PUBLIC_BASE = process.env.PUBLIC_BASE || 'https://isaconcertticket.com';
-const SHOW_TIME = process.env.SHOW_TIME || 'November 22, 2025, 7:00 PM – 8:30 PM';
-const LOGO_PATH = process.env.LOGO_PATH || path.join(__dirname, 'assets', 'logo.png');
+const PUBLIC_BASE   = process.env.PUBLIC_BASE || 'https://isaconcertticket.com';
+const SHOW_TIME     = process.env.SHOW_TIME   || 'November 22, 2025, 7:00 PM – 8:30 PM';
+const LOGO_PATH     = process.env.LOGO_PATH   || path.join(__dirname, 'assets', 'logo.png');
 const PPTX_TEMPLATE = process.env.PPTX_TEMPLATE; // e.g., /srv/ticket_server/templates/marjan.pptx
 
 // ---------- Firebase ----------
-const serviceAccountPath =
-  process.env.FIREBASE_SA_PATH || path.join(__dirname, 'firebase-service-account.json');
+const saPath = process.env.FIREBASE_SA_PATH || path.join(__dirname, 'firebase-service-account.json');
 let serviceAccount = null;
-if (fs.existsSync(serviceAccountPath)) {
-  try { serviceAccount = require(serviceAccountPath); } catch {}
-}
+if (fs.existsSync(saPath)) { try { serviceAccount = require(saPath); } catch {} }
 if (serviceAccount && !admin.apps.length) {
   admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 } else if (!serviceAccount) {
-  console.warn('⚠️ FIREBASE SERVICE ACCOUNT not found at', serviceAccountPath,
-               '— /api/verify_phone will fail.');
+  console.warn('⚠️ FIREBASE SERVICE ACCOUNT not found at', saPath, '— /api/verify_phone will fail.');
 }
 
 // ---------- PostgreSQL ----------
@@ -47,18 +43,25 @@ function buildTransport() {
   });
 }
 
-async function sendEmail(to, subject, text, attachments = []) {
-  const transporter = buildTransport();
-  await transporter.verify();
-  const from = {
-    name: process.env.FROM_NAME || 'ISA Concert Tickets',
-    address: process.env.FROM_EMAIL || 'no-reply@isaconcertticket.com'
-  };
-  const info = await transporter.sendMail({ from, to, replyTo: from.address, subject, text, attachments });
-  console.log(`✅ Email accepted by SMTP: ${info && info.messageId}`);
+async function trySendEmail({ to, subject, text, attachments }) {
+  try {
+    const transporter = buildTransport();
+    await transporter.verify();
+    const from = {
+      name: process.env.FROM_NAME || 'ISA Concert Tickets',
+      address: process.env.FROM_EMAIL || 'no-reply@isaconcertticket.com'
+    };
+    const info = await transporter.sendMail({ from, to, replyTo: from.address, subject, text, attachments });
+    console.log(`✅ Email accepted by SMTP: ${info && info.messageId}`);
+    return { ok: true };
+  } catch (e) {
+    // Don’t fail the purchase for SMTP issues (like 451 credits exceeded)
+    console.warn('⚠️ Email not sent:', e && e.message || e);
+    return { ok: false, error: e && e.message || String(e) };
+  }
 }
 
-// ---------- Utilities ----------
+// ---------- Helpers ----------
 function makeOrderId() {
   const core = (Date.now().toString(36) + Math.random().toString(36).slice(2, 6)).toUpperCase();
   return ('R' + core).slice(0, 10);
@@ -83,7 +86,7 @@ async function getAuthedPhone(req) {
   } catch { return null; }
 }
 
-// ---------- PPTX → PDF helpers ----------
+// ---------- PPTX → PDF ----------
 async function convertPptxToPdfBuffer(pptxPath) {
   return new Promise((resolve, reject) => {
     const outdir = tmp.dirSync({ unsafeCleanup: true }).name;
@@ -106,11 +109,8 @@ async function createReceiptPDFfromPPTX(order) {
     throw new Error('PPTX template not found. Set PPTX_TEMPLATE in .env');
   }
   let createReport;
-  try {
-    ({ default: createReport } = require('pptx-templates'));
-  } catch {
-    throw new Error('pptx-templates is not installed. Run: npm i pptx-templates tmp');
-  }
+  try { ({ default: createReport } = require('pptx-templates')); }
+  catch { throw new Error('pptx-templates is not installed. Run: npm i pptx-templates tmp'); }
 
   const url = `${PUBLIC_BASE}/validate.html?orderId=${order.orderId}`;
   const qrPng = await QRCode.toBuffer(url, { margin: 1, width: 600 });
@@ -152,30 +152,26 @@ const server = http.createServer(async (req, res) => {
       const orderId = u.searchParams.get('orderId') || '';
       if (!orderId) return sendJSON(res, 400, { ok: false, error: 'Missing orderId' });
 
-      // pull order + guest names from purchase_seats only (no purchase_guests table)
       const r = await pool.query(
         "SELECT p.order_id, p.email, ps.seat_id, ps.guest_name " +
-        "FROM purchases p " +
-        "LEFT JOIN purchase_seats ps ON ps.order_id = p.order_id " +
+        "FROM purchases p LEFT JOIN purchase_seats ps ON ps.order_id = p.order_id " +
         "WHERE p.order_id = $1",
         [orderId]
       );
       if (!r.rows.length) return sendJSON(res, 404, { ok: false, error: 'Not found' });
 
       const seats = [...new Set(r.rows.map(x => x.seat_id).filter(Boolean))];
-      const guests = r.rows
-        .filter(x => x.guest_name && x.seat_id)
-        .map(x => ({ name: x.guest_name, seat: x.seat_id }));
-
+      const guests = r.rows.filter(x => x.guest_name && x.seat_id)
+                           .map(x => ({ name: x.guest_name, seat: x.seat_id }));
       return sendJSON(res, 200, { ok: true, orderId, seats, guests });
     }
 
     // Phone verify webhook — stores 10-digit phone in users
     if (req.url === '/api/verify_phone' && req.method === 'POST') {
-      const body = await parseBody(req);
+      const body   = await parseBody(req);
       const decoded = await admin.auth().verifyIdToken(body.idToken);
-      const phone = decoded.phone_number; // E.164
-      const digits = String(phone || '').replace(/\D/g, '').slice(-10); // varchar(10)
+      const phone   = decoded.phone_number; // E.164
+      const digits  = String(phone || '').replace(/\D/g, '').slice(-10); // varchar(10)
       await pool.query(
         'INSERT INTO users (phone, verified) VALUES ($1, true) ' +
         'ON CONFLICT (phone) DO UPDATE SET verified = true',
@@ -184,7 +180,7 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, { ok: true });
     }
 
-    // Purchase
+    // Purchase (ACID + resilient email)
     if (req.url === '/api/purchase' && req.method === 'POST') {
       const phone = await getAuthedPhone(req); // E.164 like +16504185241
       if (!phone) return sendJSON(res, 401, { error: 'Unauthorized' });
@@ -204,65 +200,106 @@ const server = http.createServer(async (req, res) => {
         return sendJSON(res, 403, { error: 'You may reserve up to 2 seats online.' });
       }
 
-      const orderId = makeOrderId();
-      const phoneDigits = String(phone).replace(/\D/g, '').slice(-10); // purchases.phone varchar(10)
+      const orderId    = makeOrderId();
+      const phoneDigits = String(phone).replace(/\D/g, '').slice(-10);
 
-      // 1) purchases
-      await pool.query(
-        'INSERT INTO purchases (order_id, phone, email, affiliation) VALUES ($1,$2,$3,$4)',
-        [orderId, phoneDigits, email, affiliation]
-      );
+      // Prepare guest map (NOT NULL guest_name)
+      const guestBySeat = new Map((guests || []).map(g => [String(g.seat), String(g.name || '').trim()]));
 
-      // map guest name by seat for NOT NULL purchase_seats.guest_name
-      const guestBySeat = new Map(
-        (guests || []).map(g => [String(g.seat), String(g.name || '').trim()])
-      );
+      // --------- TRANSACTION: ensure DB consistency ---------
+      const client = await pool.connect();
+      let committed = false;
+      try {
+        await client.query('BEGIN');
 
-      // 2) seats + purchase_seats
-      for (const sId of seats) {
-        // seats.status
-        await pool.query('UPDATE seats SET status = $1 WHERE seat_id = $2', ['sold', sId]);
-
-        // purchase_seats requires guest_name NOT NULL
-        const gname = guestBySeat.get(sId) || 'Guest';
-        await pool.query(
-          'INSERT INTO purchase_seats (order_id, seat_id, guest_name) VALUES ($1,$2,$3) ' +
-          'ON CONFLICT DO NOTHING',
-          [orderId, sId, gname]
+        // purchases
+        await client.query(
+          'INSERT INTO purchases (order_id, phone, email, affiliation) VALUES ($1,$2,$3,$4)',
+          [orderId, phoneDigits, email, affiliation]
         );
+
+        // seats + purchase_seats
+        for (const sId of seats) {
+          await client.query('UPDATE seats SET status = $1 WHERE seat_id = $2', ['sold', sId]);
+          const gname = guestBySeat.get(sId) || 'Guest';
+          await client.query(
+            'INSERT INTO purchase_seats (order_id, seat_id, guest_name) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+            [orderId, sId, gname]
+          );
+        }
+
+        await client.query('COMMIT');
+        committed = true;
+      } catch (txErr) {
+        try { await client.query('ROLLBACK'); } catch {}
+        throw txErr; // will be caught by outer try/catch and returned as 500
+      } finally {
+        client.release();
+      }
+      // --------- END TRANSACTION ---------
+
+      // Try to build receipt & send email AFTER COMMIT (don’t block the order)
+      let email_sent = false;
+      try {
+        // Build receipt (optional)
+        let attachments = [];
+        try {
+          const pdfBuffer = await createReceiptPDFfromPPTX({ orderId, seats, guests, email, affiliation });
+          const outDir = path.join(__dirname, 'receipts'); fs.mkdirSync(outDir, { recursive: true });
+          const outPath = path.join(outDir, `receipt_${orderId}.pdf`); fs.writeFileSync(outPath, pdfBuffer);
+          attachments.push({ filename: 'receipt.pdf', path: outPath });
+        } catch (e) {
+          console.warn('⚠️ Receipt PDF not attached:', e.message);
+        }
+
+        const result = await trySendEmail({
+          to: email,
+          subject: 'Your Concert Ticket Receipt',
+          text: `Reservation confirmed.\nOrder ID: ${orderId}\nSeats: ${seats.join(', ')}\nTime: ${SHOW_TIME}`,
+          attachments
+        });
+        email_sent = !!result.ok;
+      } catch (_) {
+        email_sent = false;
       }
 
-      // Build & send receipt (best-effort)
+      // Success regardless of SMTP credit issues
+      return sendJSON(res, 200, { ok: true, orderId, email_sent });
+    }
+
+    // Resend receipt (admin/ops helper): GET /api/resend_receipt?orderId=RABC123
+    if (req.url.startsWith('/api/resend_receipt') && req.method === 'GET') {
+      const u = new URL(req.url, 'http://x');
+      const orderId = u.searchParams.get('orderId') || '';
+      if (!orderId) return sendJSON(res, 400, { ok: false, error: 'Missing orderId' });
+
+      const r = await pool.query(
+        "SELECT p.order_id, p.email, array_agg(ps.seat_id ORDER BY ps.seat_id) AS seats " +
+        "FROM purchases p LEFT JOIN purchase_seats ps ON ps.order_id = p.order_id " +
+        "WHERE p.order_id = $1 GROUP BY p.order_id, p.email",
+        [orderId]
+      );
+      if (!r.rows.length) return sendJSON(res, 404, { ok: false, error: 'Order not found' });
+
+      const email = r.rows[0].email;
+      const seats = r.rows[0].seats || [];
+
       let attachments = [];
       try {
-        const pdfBuffer = await createReceiptPDFfromPPTX({ orderId, seats, guests, email, affiliation });
+        const pdfBuffer = await createReceiptPDFfromPPTX({ orderId, seats, guests: [], email, affiliation: 'none' });
         const outDir = path.join(__dirname, 'receipts'); fs.mkdirSync(outDir, { recursive: true });
         const outPath = path.join(outDir, `receipt_${orderId}.pdf`); fs.writeFileSync(outPath, pdfBuffer);
         attachments.push({ filename: 'receipt.pdf', path: outPath });
-      } catch (e) {
-        console.warn('⚠️ Receipt PDF not attached:', e.message);
-      }
+      } catch (e) { console.warn('⚠️ Receipt PDF not attached:', e.message); }
 
-      await sendEmail(
-        email,
-        'Your Concert Ticket Receipt',
-        `Reservation confirmed.\nOrder ID: ${orderId}\nSeats: ${seats.join(', ')}\nTime: ${SHOW_TIME}`,
+      const result = await trySendEmail({
+        to: email,
+        subject: 'Your Concert Ticket Receipt (Resent)',
+        text: `Order ID: ${orderId}\nSeats: ${seats.join(', ')}\nTime: ${SHOW_TIME}`,
         attachments
-      );
+      });
 
-      return sendJSON(res, 200, { ok: true, orderId });
-    }
-
-    // SMTP test
-    if (req.url.startsWith('/api/test_mail') && req.method === 'GET') {
-      const u = new URL(req.url, 'http://x');
-      const to = u.searchParams.get('to');
-      try {
-        await sendEmail(to || (process.env.TEST_TO || ''), 'SMTP test', 'This is a test email from ISA Concert server.');
-        return sendJSON(res, 200, { ok: true, to: to || process.env.TEST_TO || null });
-      } catch (e) {
-        return sendJSON(res, 500, { ok: false, error: e.message });
-      }
+      return sendJSON(res, 200, { ok: true, email_sent: !!result.ok, error: result.error || null });
     }
 
     // Static files

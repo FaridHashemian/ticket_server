@@ -311,9 +311,14 @@ window.addEventListener('DOMContentLoaded', () => {
     const p = window.__pendingOrder; if (!p) return;
     try {
       const r = await purchaseSeats({ seats: [...state.selected], guests: p.guests, email: p.email, affiliation: p.affiliation });
-      alert(`Reservation confirmed! Order: ${r.orderId}\nA PDF receipt was sent to ${p.email}.`);
+      const msg = r.email_sent === false
+        ? `Reservation confirmed! Order: ${r.orderId}\nEmail could not be sent (provider limit). We saved your order.\nYou can use the order number above, or resend later when email is restored.`
+        : `Reservation confirmed! Order: ${r.orderId}\nA PDF receipt was sent to ${p.email}.`;
+      alert(msg);
       closeConfirmModal(); state.selected.clear(); updateSummary(); await loadSeats();
-    } catch (e) { alert(e.message || 'Reservation failed.'); }
+    } catch (e) {
+      alert(e.message || 'Reservation failed.');
+    }
   });
 
   $('#signout-btn')?.addEventListener('click', signOutFlow);
