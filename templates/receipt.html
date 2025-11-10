@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ISA Concert Ticket – Receipt</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{
+      --page-w: 1080px;
+      --page-h: 1620px;
+      --gutter: 28px;
+      --brand: #0e2a47;
+      --brand-acc: #28b7b3;
+      --panel-bg: rgba(30,30,30,.85);
+      --white: #fff;
+      --muted: rgba(255,255,255,.85);
+    }
+    @page { size: var(--page-w) var(--page-h); margin: 0; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: #111;
+      font-family: "Helvetica Neue", Arial, system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans", sans-serif;
+    }
+
+    .page {
+      position: relative;
+      width: min(100vw, var(--page-w));
+      height: calc(var(--page-h) * (min(100vw, var(--page-w)) / var(--page-w)));
+      margin: 0 auto;
+      color: var(--white);
+      overflow: hidden;
+      background: #000;
+    }
+
+    .bg {
+      position: absolute; inset: 0;
+      background:
+        linear-gradient(180deg, rgba(0,0,0,.25) 0%, rgba(0,0,0,.55) 60%, rgba(0,0,0,.85) 100%),
+        url("background.jpg") center/cover no-repeat;
+      filter: grayscale(100%);
+    }
+
+    .watermark {
+      position: absolute; right: calc(var(--gutter)); bottom: calc(var(--gutter));
+      width: 160px; opacity: .25; mix-blend-mode: screen;
+    }
+
+    .wrap {
+      position: relative; z-index: 2;
+      height: 100%;
+      padding: calc(var(--gutter) * 1.2);
+      display: grid;
+      grid-template-columns: 1.1fr 1fr;
+      grid-template-rows: auto auto 1fr auto;
+      gap: calc(var(--gutter) * .8);
+    }
+
+    .badge { font-weight: 700; letter-spacing: .08em; font-size: 16px; opacity: .95; }
+    .meta {
+      justify-self: end; text-align: right; font-size: 14px; line-height: 1.4;
+    }
+    .meta b { font-weight: 700; }
+
+    .title {
+      grid-column: 1 / -1;
+      font-size: clamp(36px, 7.2vw, 104px);
+      line-height: .95; font-weight: 900;
+      letter-spacing: .02em;
+      margin-top: 8px;
+      text-transform: uppercase;
+    }
+
+    .when {
+      align-self: start;
+      font-weight: 800;
+      letter-spacing: .04em;
+      font-size: clamp(18px, 2.2vw, 28px);
+    }
+    .when .date { margin-top: 10px; font-size: clamp(32px, 4vw, 44px); }
+    .when .time { margin-top: 6px; font-size: clamp(20px, 2.6vw, 28px); }
+
+    .blurb {
+      max-width: 38ch;
+      color: var(--muted);
+      font-size: 16px; line-height: 1.55;
+      text-wrap: pretty;
+    }
+
+    .guest-strip {
+    grid-column: 1 / -1;
+    align-self: end;
+    background: var(--panel-bg);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 4px 9px rgba(0,0,0,.35);
+
+    /* QR is 150px tall → keep the table above it with extra buffer */
+    margin-bottom: calc(375px + 80px); /* reduced from 80px for higher QR positioning */
+    }
+
+    table { width: 100%; border-collapse: collapse; }
+    thead th {
+      background: rgba(255,255,255,.06);
+      padding: 14px 16px;
+      text-align: left; font-weight: 800; font-size: 15px;
+      letter-spacing: .02em;
+    }
+    tbody td {
+      padding: 12px 16px; font-size: 15px; border-top: 1px solid rgba(255,255,255,.08);
+    }
+
+    tbody { counter-reset: row; }
+    td.auto-id::before { counter-increment: row; content: counter(row); }
+
+    .qr {
+      position: absolute;
+      right: calc(var(--gutter) + 8px);
+      bottom: calc(var(--gutter) + 206px);
+      width: 150px; height: 150px;
+      background: #fff; display: grid; place-items: center;
+      border-radius: 4px; box-shadow: 0 4px 9px rgba(0,0,0,.35);
+      overflow: hidden;
+    }
+    .qr img { width: 100%; height: 100%; object-fit: cover; }
+
+    .meta .line {
+      display: inline-block; height: 3px; background: var(--brand-acc);
+      vertical-align: middle; border-radius: 6px; width: 56px; margin-left: 10px;
+    }
+
+    @media print {
+      body { background: #000; }
+      .page { width: var(--page-w); height: var(--page-h); }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="bg" aria-hidden="true"></div>
+    <img class="watermark" src="logo.png" alt="ISA Logo watermark" />
+
+    <div class="wrap">
+      <div class="badge">ISA CONCERT TICKET</div>
+
+      <div class="meta">
+        <div><b>Reserved At:</b> {{ reservationTime }} <span class="line"></span></div>
+        <div><b>Reservation #:</b> {{ reservationNumber }} <span class="line"></span></div>
+      </div>
+
+      <div class="title">Marjan Farsad</div>
+
+      <div class="when">
+        <div class="weekday">SATURDAY</div>
+        <div class="date">NOVEMBER 22</div>
+        <div class="time">7 PM – 8:30 PM</div>
+        <div class="location">Union Theater</div>
+      </div>
+
+      <div class="blurb">
+        Welcome to the Marjan Farsad Concert hosted by the Iranian Students
+        Association at the University of Arkansas! We’re delighted to have you
+        join us for an evening of music and art. Please arrive at least
+        <b>15 minutes early</b> to ensure a smooth seating experience.
+      </div>
+
+      <div class="guest-strip">
+        <table role="table" aria-label="Guest List">
+          <thead>
+            <tr>
+              <th style="width: 70px;">ID</th>
+              <th>Guest Name</th>
+              <th style="width: 220px;">Seat Number</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="auto-id"></td>
+              <td>{{name1}}</td>
+              <td>{{seat1}}</td>
+            </tr>
+            <tr>
+              <td class="auto-id"></td>
+              <td>{{name2}}</td>
+              <td>{{seat2}}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="qr" aria-label="Ticket QR">
+      <img src="{{ qrUrl }}" alt="QR Code" />
+    </div>
+  </div>
+</body>
+</html>
