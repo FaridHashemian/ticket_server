@@ -16,7 +16,7 @@ function resolveApiBase() {
   return { primary: sameOrigin + '/api', fallback: sameOrigin + '/api' };
 }
 function toE164US(raw){
-  const d = String(raw || '').replace(/\D/g,'').slice(-10);
+  const d = String(raw || '').replace(/\D/g,'').slice(0, 10);
   return d ? `+1${d}` : null;
 }
 const API_URLS = resolveApiBase();
@@ -200,7 +200,7 @@ async function signOutFlow() {
   if (phoneInput) phoneInput.value = '';
   if (codeInput)   codeInput.value   = '';
   $('#auth-message').textContent = '';
-  const userInfo = $('#user-info'); const userPhone = $('#user-phone');
+  const userInfo = $('#user-info'); const userPhone = $('#user-phone'];
   if (userInfo) userInfo.classList.add('hidden');
   if (userPhone) userPhone.textContent = '';
   const sendBtnEl = document.getElementById('login-phone-btn'); if (sendBtnEl) sendBtnEl.disabled = false;
