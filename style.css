@@ -49,12 +49,38 @@ input[type=email],input[type=text],input[type=tel]{width:100%;padding:10px;borde
   text-align:center;font-weight:700;letter-spacing:.2em;background:#111827;color:#fff;
   padding:10px;border-radius:8px 8px 0 0;border:1px solid #e5e7eb;border-bottom:none;
 }
-.seat-map{
-  display:grid;grid-template-columns:repeat(25,1fr);gap:6px;background:#fff;border:1px solid #e5e7eb;border-radius:0 0 8px 8px;padding:12px;align-self:start
+
+/* Seat grid: each visual row has exactly 27 columns */
+#seat-map{
+  display:flex;              /* stack rows vertically */
+  flex-direction:column;
+  gap:10px;
+  background:#fff;
+  border:1px solid #e5e7eb;
+  border-radius:0 0 8px 8px;
+  padding:12px;
+  align-self:start
 }
-.seat{padding:8px 0;text-align:center;border:1px solid #c7d2fe;border-radius:6px;user-select:none;background:#eff6ff}
+.seat-row{
+  display:grid;
+  grid-template-columns:repeat(27, 40px);
+  gap:8px;
+  align-items:center;
+}
+
+/* actual seat cell */
+.seat{
+  width:40px;height:40px;
+  padding:0;text-align:center;
+  border:1px solid #c7d2fe;border-radius:6px;user-select:none;
+  background:#eff6ff; display:inline-flex; align-items:center; justify-content:center;
+  font-weight:600; font-size:13px;
+}
 .seat.selected{outline:2px solid #2563eb}
 .seat.sold{background:#d1d5db;color:#6b7280;border-color:#cbd5e1;cursor:not-allowed}
+
+/* invisible placeholders keep alignment for rows with < 27 seats */
+.seat.placeholder{visibility:hidden;pointer-events:none}
 
 .summary{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:12px;height:fit-content}
 .selected-seats{list-style:none;margin:8px 0 12px}

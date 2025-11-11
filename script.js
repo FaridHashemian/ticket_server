@@ -99,6 +99,9 @@ async function purchaseSeats({ seats, guests, email, affiliation }) {
 }
 
 /* ------------------------- Seat rendering + UI ------------------------- */
+const ROWS = ['A','B','C','D','E','F','G','H','J','K']; // (no I)
+const COLS = 27; // fixed visual columns per row
+
 function formatSeatLabel(id) {
   if (!id) return '';
   const m = String(id).match(/^([A-Za-z]+)(\d+)$/);
@@ -108,25 +111,40 @@ function formatSeatLabel(id) {
   return row + num;
 }
 
-function seatCompare(a, b) {
-  const ra = String(a.id).match(/^([A-Za-z]+)(\d+)$/) || [];
-  const rb = String(b.id).match(/^([A-Za-z]+)(\d+)$/) || [];
-  const raRow = (ra[1] || '').toUpperCase();
-  const rbRow = (rb[1] || '').toUpperCase();
+// Build a seat DOM element (clickable if available)
+function buildSeatEl(seat, state, rerender, updateSummary) {
+  const el = document.createElement('button');
+  el.type = 'button';
+  const unavailable = seat.status !== 'available';
+  el.className = 'seat' + (unavailable ? ' sold' : '') + (state.selected.has(seat.id) ? ' selected' : '');
+  el.dataset.id = seat.id;
+  el.textContent = formatSeatLabel(seat.id);
+  if (!unavailable) {
+    el.addEventListener('click', () => {
+      if (state.selected.has(seat.id)) {
+        state.selected.delete(seat.id);
+      } else {
+        if (!state.organizer && state.selected.size >= 2) {
+          alert('You can select up to 2 seats online.');
+          return;
+        }
+        state.selected.add(seat.id);
+      }
+      rerender(); updateSummary();
+    });
+  }
+  return el;
+}
 
-  // Sort rows alphabetically (A to K)
-  if (raRow < rbRow) return -1;
-  if (raRow > rbRow) return 1;
-
-  // Within each row, reverse seat numbers (so 1 is far right)
-  const na = parseInt(ra[2] || '0', 10);
-  const nb = parseInt(rb[2] || '0', 10);
-  return nb - na; // descending order
+// Invisible placeholder cell keeps alignment for short rows
+function placeholderCell() {
+  const el = document.createElement('div');
+  el.className = 'seat placeholder';
+  return el;
 }
 
 const state = { seats: [], selected: new Set(), organizer: false };
 const $ = s => document.querySelector(s);
-const $$ = s => Array.from(document.querySelectorAll(s));
 const setHidden = (el, hide) => (hide ? el.classList.add('hidden') : el.classList.remove('hidden'));
 
 function updateAvailableCounter() {
@@ -135,49 +153,72 @@ function updateAvailableCounter() {
   if (ctn) { ctn.querySelector('span').textContent = String(available); setHidden(ctn, false); }
 }
 
+/**
+ * Render seats into #seat-map using exactly 27 columns per row.
+ * Seat "1" appears at the FAR RIGHT (descending numbers visually).
+ */
 function renderSeatMap() {
-  const map = $('#seat-map'); if (!map) return;
-  map.innerHTML = '';
-  state.seats.forEach(seat => {
-    const div = document.createElement('div');
-    const disabled = seat.status !== 'available';
-    div.className = 'seat' + (seat.status !== 'available' ? ' sold' : '') + (state.selected.has(seat.id) ? ' selected' : '');
-    div.textContent = formatSeatLabel(seat.id); div.dataset.id = seat.id;
+  const grid = document.getElementById('seat-map');
+  if (!grid) return;
+  grid.innerHTML = '';
 
-    if (!disabled) {
-      div.addEventListener('click', () => {
-        if (state.selected.has(seat.id)) { state.selected.delete(seat.id); }
-        else {
-          if (!state.organizer && state.selected.size >= 2) { alert('You can select up to 2 seats online.'); return; }
-          state.selected.add(seat.id);
-        }
-        renderSeatMap(); updateSummary();
-      });
+  // Group seats by row and parse numbers
+  const byRow = new Map();
+  for (const s of state.seats) {
+    const m = String(s.id).match(/^([A-Za-z]+)(\d+)$/);
+    if (!m) continue;
+    const row = m[1].toUpperCase();
+    const num = parseInt(m[2], 10);
+    if (!byRow.has(row)) byRow.set(row, []);
+    byRow.get(row).push({ ...s, _num: num });
+  }
+
+  // Render A..K (skip I); fill each row to 27 cells with placeholders
+  for (const row of ROWS) {
+    const wrap = document.createElement('div');
+    wrap.className = 'seat-row';
+    wrap.setAttribute('data-row', row);
+
+    const cells = Array.from({ length: COLS }, () => placeholderCell());
+    const arr = byRow.get(row) || [];
+
+    // place real seats; visual index = COLS - seat_number (0-based)
+    for (const s of arr) {
+      if (s._num < 1 || s._num > COLS) continue;
+      const idx = COLS - s._num;
+      cells[idx] = buildSeatEl(s, state, renderSeatMap, updateSummary);
     }
-    map.appendChild(div);
-  });
+    for (const cell of cells) wrap.appendChild(cell);
+    grid.appendChild(wrap);
+  }
+
   updateAvailableCounter();
 }
 
 function updateSummary() {
-  const list = $('#selected-seats'); const btn = $('#checkout-btn');
+  const list = document.getElementById('selected-seats');
+  const btn  = document.getElementById('checkout-btn');
   if (!list || !btn) return;
   list.innerHTML = '';
-  [...state.selected].forEach(id => { const li = document.createElement('li'); li.textContent = formatSeatLabel(id); list.appendChild(li); });
+  [...state.selected].forEach(id => {
+    const li = document.createElement('li');
+    li.textContent = formatSeatLabel(id);
+    list.appendChild(li);
+  });
   btn.disabled = state.selected.size === 0 || (!state.organizer && state.selected.size > 2);
 }
 
 async function loadSeats() {
-  const seatArea = $('#seat-area');
-  const seatErr = $('#seat-error');
+  const seatArea = document.getElementById('seat-area');
+  const seatErr  = document.getElementById('seat-error');
   try {
     const res = await apiFetch('/seats');
     if (!res.ok) throw new Error(`Seat API error (${res.status})`);
     const j = await res.json();
-    state.seats = Array.isArray(j.seats) ? j.seats.sort(seatCompare) : [];
+    state.seats = Array.isArray(j.seats) ? j.seats : [];
     renderSeatMap();
     setHidden(seatArea, false);
-    setHidden($('#summary'), false);
+    setHidden(document.getElementById('summary'), false);
     setHidden(seatErr, true);
   } catch (e) {
     setHidden(seatArea, false);
@@ -187,8 +228,8 @@ async function loadSeats() {
 }
 
 function showSignedInHeader() {
-  const info = $('#user-info');
-  const phoneSpan = $('#user-phone');
+  const info = document.getElementById('user-info');
+  const phoneSpan = document.getElementById('user-phone');
   const u = auth.currentUser;
   if (u && phoneSpan) phoneSpan.textContent = u.phoneNumber || '';
   setHidden(info, !u);
@@ -201,29 +242,32 @@ async function signOutFlow() {
   setupRecaptcha('recaptcha-container');
 
   state.selected.clear(); updateSummary();
-  const phoneInput = $('#phone-input'), codeInput = $('#code-input');
+  const phoneInput = document.getElementById('phone-input');
+  const codeInput  = document.getElementById('code-input');
   if (phoneInput) phoneInput.value = '';
   if (codeInput)   codeInput.value   = '';
-  $('#auth-message').textContent = '';
-  const userInfo = $('#user-info'); const userPhone = $('#user-phone');
+  document.getElementById('auth-message').textContent = '';
+  const userInfo = document.getElementById('user-info');
+  const userPhone = document.getElementById('user-phone');
   if (userInfo) userInfo.classList.add('hidden');
   if (userPhone) userPhone.textContent = '';
   const sendBtnEl = document.getElementById('login-phone-btn'); if (sendBtnEl) sendBtnEl.disabled = false;
-  $('#verification-message').textContent = '';
+  document.getElementById('verification-message').textContent = '';
 
-  const signInSection = $('#sign-in-section');
-  const verificationSection = $('#verification-section');
+  const signInSection = document.getElementById('sign-in-section');
+  const verificationSection = document.getElementById('verification-section');
   verificationSection.classList.add('hidden');
   signInSection.classList.remove('hidden');
 
-  setHidden($('#seat-area'), true);
-  setHidden($('#summary'), true);
-  setHidden($('#auth-container'), false);
-  setHidden($('#notice-container'), true);
+  setHidden(document.getElementById('seat-area'), true);
+  setHidden(document.getElementById('summary'), true);
+  setHidden(document.getElementById('auth-container'), false);
+  setHidden(document.getElementById('notice-container'), true);
 }
 
 function openGuestModal() {
-  const namesBox = $('#guest-names'); const emailInput = $('#receipt-email');
+  const namesBox  = document.getElementById('guest-names');
+  const emailInput= document.getElementById('receipt-email');
   namesBox.innerHTML = '';
   [...state.selected].forEach((id, idx) => {
     const wrap = document.createElement('div'); wrap.style.marginTop = '8px';
@@ -232,17 +276,24 @@ function openGuestModal() {
     namesBox.appendChild(wrap);
   });
   emailInput.value = '';
-  setHidden($('#guest-modal'), false);
+  setHidden(document.getElementById('guest-modal'), false);
 }
-const closeGuestModal = () => setHidden($('#guest-modal'), true);
-function openConfirmModal(seatIds){ $('#summary-seats').textContent = `Seats: ${seatIds.map(formatSeatLabel).join(', ')}`; setHidden($('#checkout-modal'), false); }
-const closeConfirmModal = () => setHidden($('#checkout-modal'), true);
+const closeGuestModal = () => setHidden(document.getElementById('guest-modal'), true);
+function openConfirmModal(seatIds){
+  document.getElementById('summary-seats').textContent = `Seats: ${seatIds.map(formatSeatLabel).join(', ')}`;
+  setHidden(document.getElementById('checkout-modal'), false);
+}
+const closeConfirmModal = () => setHidden(document.getElementById('checkout-modal'), true);
 
 window.addEventListener('DOMContentLoaded', () => {
   setupRecaptcha('recaptcha-container');
 
-  const phoneInput = $('#phone-input'); const sendBtn = $('#login-phone-btn'); const authMsg = $('#auth-message');
-  const codeInput  = $('#code-input');  const verifyBtn = $('#verify-phone-btn'); const verifyMsg = $('#verification-message');
+  const phoneInput = document.getElementById('phone-input');
+  const sendBtn    = document.getElementById('login-phone-btn');
+  const authMsg    = document.getElementById('auth-message');
+  const codeInput  = document.getElementById('code-input');
+  const verifyBtn  = document.getElementById('verify-phone-btn');
+  const verifyMsg  = document.getElementById('verification-message');
 
   if (phoneInput) {
     phoneInput.setAttribute('maxlength', '14');
@@ -293,30 +344,34 @@ window.addEventListener('DOMContentLoaded', () => {
   auth.onAuthStateChanged(async (u) => {
     if (u) {
       state.organizer = !!(u && toE164US(u.phoneNumber) === toE164US(ALLOWED_PHONE));
-      setHidden($('#auth-container'), true);
+      setHidden(document.getElementById('auth-container'), true);
       await loadSeats();
       showSignedInHeader();
     }
   });
 
-  $('#checkout-btn')?.addEventListener('click', () => { if (state.selected.size) openGuestModal(); });
-  $('#guest-cancel-btn')?.addEventListener('click', closeGuestModal);
+  document.getElementById('checkout-btn')?.addEventListener('click', () => {
+    if (state.selected.size) openGuestModal();
+  });
+  document.getElementById('guest-cancel-btn')?.addEventListener('click', closeGuestModal);
 
-  $('#guest-next-btn')?.addEventListener('click', () => {
-    const email = $('#receipt-email').value.trim();
+  document.getElementById('guest-next-btn')?.addEventListener('click', () => {
+    const email = document.getElementById('receipt-email').value.trim();
     const affiliation = (document.querySelector('input[name="affil"]:checked')?.value || 'none').toLowerCase();
     const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
     if (!emailOk) return alert('Please enter a valid receipt email.');
     if (['student','staff'].includes(affiliation) && !/@(uark|uada)\.edu$/i.test(email))
       return alert('Students/Staff must use @uark.edu or @uada.edu for the receipt email.');
-    const names = $$('.guest-name').map(inp => ({ name: inp.value.trim(), seat: inp.dataset.seat }));
+    const names = Array.from(document.querySelectorAll('.guest-name')).map(inp => ({ name: inp.value.trim(), seat: inp.dataset.seat }));
     if (names.some(g => !g.name)) return alert('Please enter all guest names.');
     closeGuestModal(); openConfirmModal([...state.selected]); window.__pendingOrder = { email, affiliation, guests: names };
   });
 
-  $('#cancel-btn')?.addEventListener('click', () => { closeConfirmModal(); window.__pendingOrder = null; });
+  document.getElementById('cancel-btn')?.addEventListener('click', () => {
+    closeConfirmModal(); window.__pendingOrder = null;
+  });
 
-  $('#confirm-btn')?.addEventListener('click', async () => {
+  document.getElementById('confirm-btn')?.addEventListener('click', async () => {
     const p = window.__pendingOrder; if (!p) return;
     try {
       const r = await purchaseSeats({ seats: [...state.selected], guests: p.guests, email: p.email, affiliation: p.affiliation });
@@ -330,5 +385,5 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  $('#signout-btn')?.addEventListener('click', signOutFlow);
+  document.getElementById('signout-btn')?.addEventListener('click', signOutFlow);
 });
