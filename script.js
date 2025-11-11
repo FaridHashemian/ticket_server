@@ -99,24 +99,29 @@ async function purchaseSeats({ seats, guests, email, affiliation }) {
 }
 
 /* ------------------------- Seat rendering + UI ------------------------- */
-function formatSeatLabel(id){
-  if(!id) return '';
+function formatSeatLabel(id) {
+  if (!id) return '';
   const m = String(id).match(/^([A-Za-z]+)(\d+)$/);
-  if(!m) return String(id);
+  if (!m) return String(id);
   const row = m[1].toUpperCase();
-  const num = String(parseInt(m[2],10)).padStart(2,'0');
+  const num = String(parseInt(m[2], 10)).padStart(2, '0');
   return row + num;
 }
-function seatCompare(a,b){
+
+function seatCompare(a, b) {
   const ra = String(a.id).match(/^([A-Za-z]+)(\d+)$/) || [];
   const rb = String(b.id).match(/^([A-Za-z]+)(\d+)$/) || [];
-  const raRow = (ra[1]||'').toUpperCase();
-  const rbRow = (rb[1]||'').toUpperCase();
+  const raRow = (ra[1] || '').toUpperCase();
+  const rbRow = (rb[1] || '').toUpperCase();
+
+  // Sort rows alphabetically (A to K)
   if (raRow < rbRow) return -1;
   if (raRow > rbRow) return 1;
-  const na = parseInt(ra[2]||'0',10);
-  const nb = parseInt(rb[2]||'0',10);
-  return na - nb;
+
+  // Within each row, reverse seat numbers (so 1 is far right)
+  const na = parseInt(ra[2] || '0', 10);
+  const nb = parseInt(rb[2] || '0', 10);
+  return nb - na; // descending order
 }
 
 const state = { seats: [], selected: new Set(), organizer: false };

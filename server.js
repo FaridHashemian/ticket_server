@@ -320,9 +320,9 @@ const server = http.createServer(async (req, res) => {
 
     if (req.url === '/api/seats' && req.method === 'GET') {
       const { rows } = await pool.query(
-        "SELECT seat_id, status FROM seats " +
-        "ORDER BY UPPER(REGEXP_REPLACE(seat_id,'[^A-Za-z]+.*$',''))," +
-        " (REGEXP_REPLACE(seat_id,'[^0-9]','','g'))::int"
+          `SELECT seat_id, status
+     FROM seats
+   ORDER BY seat_row ASC, seat_number DESC`
       );
       return sendJSON(res, 200, { seats: rows.map(r => ({ id: r.seat_id, status: r.status })) });
     }
