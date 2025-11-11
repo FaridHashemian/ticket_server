@@ -1,7 +1,6 @@
 // server.js — ISA Ticket Server (Node + Postgres + Mailgun SMTP)
 // HTML template → PDF via Puppeteer (fills reservationTime, reservationNumber, name1/seat1, name2/seat2, qrUrl)
-// Includes: real "Reserved At" timestamp, single-logo injection, HTML announcement email,
-// and a one-time SEAT LAYOUT SEEDER for rows A–K (skip I).
+// Includes: real "Reserved At" timestamp, single-logo injection, and HTML announcement email.
 
 require('dotenv').config();
 
@@ -22,11 +21,9 @@ const SHOW_TIME     = process.env.SHOW_TIME   || 'November 22, 2025, 7:00 PM –
 const TEMPLATE_DIR     = process.env.TEMPLATE_DIR     || path.join(__dirname);
 const RECEIPT_TEMPLATE = process.env.RECEIPT_TEMPLATE || path.join(TEMPLATE_DIR, 'receipt.html');
 
+// allow absolute asset overrides via .env
 const BG_PATH   = process.env.BG_PATH   || path.join(TEMPLATE_DIR, 'background.jpg');
 const LOGO_PATH = process.env.LOGO_PATH || path.join(TEMPLATE_DIR, 'logo.png');
-
-// NEW: one-time seeding flag (set SEED_LAYOUT=1 then restart; remove afterwards)
-const SEED_LAYOUT = String(process.env.SEED_LAYOUT || '0') === '1';
 
 // ---------- Firebase ----------
 const saPath = process.env.FIREBASE_SA_PATH || path.join(__dirname, 'firebase-service-account.json');
@@ -46,13 +43,16 @@ function buildTransport() {
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST || 'smtp.mailgun.org',
     port: parseInt(process.env.SMTP_PORT || '587', 10),
-    secure: String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
+    secure: String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true', // false for STARTTLS (587)
     requireTLS: true,
     auth: {
       user: process.env.SMTP_USER || 'receipt@isaconcertticket.com',
       pass: process.env.SMTP_PASS || ''
     },
-    tls: { ciphers: 'SSLv3', rejectUnauthorized: false }
+    tls: {
+      ciphers: 'SSLv3',
+      rejectUnauthorized: false
+    }
   });
 }
 
@@ -64,7 +64,15 @@ async function trySendEmail({ to, subject, text, html, attachments }) {
       name: process.env.FROM_NAME || 'ISA Concert Tickets',
       address: process.env.FROM_EMAIL || 'receipt@isaconcertticket.com'
     };
-    const info = await transporter.sendMail({ from, to, replyTo: from.address, subject, text, html, attachments });
+    const info = await transporter.sendMail({
+      from,
+      to,
+      replyTo: from.address,
+      subject,
+      text,
+      html,
+      attachments
+    });
     console.log(`✅ Mail accepted by SMTP: ${info && info.messageId}`);
     return { ok: true };
   } catch (e) {
@@ -113,7 +121,7 @@ function formatReservedAt(d) {
   }
 }
 
-// ---------- Email bodies ----------
+// Build the announcement HTML + plain text for emails
 function buildEmailBodies({ orderId, seats = [], reservedAt }) {
   const seatLine = seats.length ? seats.join(', ') : '—';
   const html = `
@@ -122,7 +130,7 @@ function buildEmailBodies({ orderId, seats = [], reservedAt }) {
       <h1 style="margin:0 0 16px;font-size:40px;line-height:1.1;color:#111;">
         You Reserved Your Seat For Marjan Farsad Concert!
       </h1>
-      <div style="margin:18px 0 12px;padding:12px 14px;background:#f1f4ff;border:1px solid #dfe6ff;border-radius:10px;">
+        <div style="margin:18px 0 12px;padding:12px 14px;background:#f1f4ff;border:1px solid #dfe6ff;border-radius:10px;">
         <div><strong>Reservation #:</strong> ${orderId}</div>
         <div><strong>Reserved At:</strong> ${reservedAt}</div>
         <div><strong>Seats:</strong> ${seatLine}</div>
@@ -140,10 +148,16 @@ function buildEmailBodies({ orderId, seats = [], reservedAt }) {
       <h3 style="margin:20px 0 8px;">Parking Information:</h3>
       <p style="margin:0 0 12px;">Union Parking is available in accordance with the University’s parking rules and regulations.</p>
 
-      <p style="margin:18px 0 4px;">See you on <strong>November 22, 7 pm @ Union Theater</strong>!</p>
+      <p style="margin:18px 0 4px;">
+        See you on <strong>November 22, 7 pm @ Union Theater</strong>!
+      </p>
 
-      <p style="margin:10px 0 0;color:#555;">Your PDF receipt with QR code is attached to this email. Please bring it (printed or on your phone) for check-in.</p>
-      <p style="margin:18px 0 0;">If you have any questions, or you want to modify your reservation, contact <b>isa@uark.edu</b>.</p>
+      <p style="margin:10px 0 0;color:#555;">
+        Your PDF receipt with QR code is attached to this email. Please bring it (printed or on your phone) for check-in.
+      </p>
+      <p  style="margin:18px 0 4px;">
+        If you have any questions, or you want to modify your reservation, feel free to contact the following email <b>isa@uark.edu</b>.
+      </p>
     </div>
   </div>`.trim();
 
@@ -156,6 +170,7 @@ function buildEmailBodies({ orderId, seats = [], reservedAt }) {
     `Concert Time: ${SHOW_TIME}`,
     '',
     'Thank you for reserving your seat for the upcoming concert.',
+    '',
     'Welcome to the Marjan Farsad Concert hosted by the Iranian Students Association at the University of Arkansas!',
     'Please arrive at least 15 minutes early to ensure a smooth seating experience.',
     '',
@@ -163,14 +178,16 @@ function buildEmailBodies({ orderId, seats = [], reservedAt }) {
     'Union Parking is available in accordance with the University’s parking rules and regulations.',
     '',
     'See you on November 22, 7 pm @ Union Theater!',
+    '',
     'Your PDF receipt with QR code is attached.',
-    'If you have any questions, email isa@uark.edu.'
+    '',
+    'If you have any questions, or you want to modify your reservation, feel free to contact the following email isa@uark.edu.'
   ].join('\n');
 
   return { html, text };
 }
 
-// ---------- HTML → PDF helpers ----------
+// ---------- HTML → PDF ----------
 function htmlEscape(s) {
   return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
@@ -179,6 +196,8 @@ function injectBaseHref(html, dirAbsPath) {
   if (/<base\s/i.test(html)) return html;
   return html.replace(/<head([^>]*)>/i, (m, g1) => `<head${g1}>${base}`);
 }
+
+// single-logo safe inliner
 function inlineAssets(html) {
   const original = html;
 
@@ -253,12 +272,22 @@ async function htmlToPdfBuffer(html) {
   let browser;
   try {
     browser = await puppeteer.launch({
-      args: ['--no-sandbox','--disable-setuid-sandbox','--allow-file-access-from-files']
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--allow-file-access-from-files'
+      ]
     });
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: ['domcontentloaded','networkidle0'] });
-    return await page.pdf({ format: 'A4', printBackground: true, margin: { top: '10mm', right: '10mm', bottom: '10mm', left: '10mm' } });
-  } finally { try { await browser?.close(); } catch {} }
+    return await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '10mm', right: '10mm', bottom: '10mm', left: '10mm' }
+    });
+  } finally {
+    try { await browser?.close(); } catch {}
+  }
 }
 
 async function buildReceiptPdf(order) {
@@ -283,59 +312,6 @@ async function buildReceiptPdf(order) {
   });
   return await htmlToPdfBuffer(html);
 }
-
-// ---------- NEW: Seat Layout Seeder (A–K, skip I) ----------
-const SEAT_LAYOUT = {
-  A: 18,
-  B: 24,
-  C: 26,
-  D: 27,
-  E: 27,
-  F: 27,
-  G: 27,
-  H: 27,
-  J: 27, // no I
-  K: 19
-};
-
-function generateSeatIds(layout) {
-  const ids = [];
-  for (const row of Object.keys(layout)) {
-    const count = layout[row];
-    for (let n = 1; n <= count; n++) {
-      ids.push(`${row}${String(n).padStart(2, '0')}`);
-    }
-  }
-  return ids;
-}
-
-async function seedSeatLayoutIfRequested() {
-  if (!SEED_LAYOUT) return;
-  console.warn('⚠️ SEED_LAYOUT=1 detected — clearing purchases and reseeding seats…');
-  const ids = generateSeatIds(SEAT_LAYOUT);
-
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query('DELETE FROM purchase_seats');
-    await client.query('DELETE FROM purchases');
-    await client.query('DELETE FROM seats');
-
-    // bulk insert seats as available
-    for (const id of ids) {
-      await client.query('INSERT INTO seats (seat_id, status) VALUES ($1,$2)', [id, 'available']);
-    }
-    await client.query('COMMIT');
-    console.log(`✅ Seeded ${ids.length} seats (A–K, no I).`);
-  } catch (e) {
-    try { await client.query('ROLLBACK'); } catch {}
-    console.error('❌ Seeding failed:', e.message);
-  } finally {
-    client.release();
-  }
-}
-// kick seeding right away (no-op if SEED_LAYOUT not set)
-seedSeatLayoutIfRequested();
 
 // ---------- API ----------
 const server = http.createServer(async (req, res) => {
@@ -387,11 +363,11 @@ const server = http.createServer(async (req, res) => {
       const phone = await getAuthedPhone(req);
       if (!phone) return sendJSON(res, 401, { error: 'Unauthorized' });
 
-      // organizer normalization (unchanged)
+
+      // normalize both sides so the comparison is rock solid
       const envAllowed = toE164US(process.env.ALLOWED_PHONE || '+16504185241');
       const phoneE164  = toE164US(phone);
       const isOrganizer = (phoneE164 && envAllowed) ? (phoneE164 === envAllowed) : false;
-
       const body = await parseBody(req);
       const seats = Array.isArray(body.seats) ? body.seats.map(String) : [];
       const guests = Array.isArray(body.guests) ? body.guests : [];
@@ -401,24 +377,27 @@ const server = http.createServer(async (req, res) => {
 
       if (!email) return sendJSON(res, 400, { error: 'Missing email' });
       if (!seats.length) return sendJSON(res, 400, { error: 'No seats selected' });
-      if (!isOrganizer && seats.length > 2) {
-        return sendJSON(res, 403, { error: 'You may reserve up to 2 seats online.' });
-      }
+
+      if (!isOrganizer && seats.length > 2) return sendJSON(res, 403, { error: 'You may reserve up to 2 seats online.' });
 
       const orderId     = makeOrderId();
       const phoneDigits = String(phoneE164 || '').replace(/\D/g, '').slice(-10);
 
-      // cumulative cap (unchanged)
+      // cumulative count of seats already reserved by this phone
       const { rows: priorRows } = await pool.query(
         `SELECT COALESCE(COUNT(*),0)::int AS cnt
-         FROM purchase_seats ps
-         JOIN purchases p ON p.order_id = ps.order_id
-         WHERE p.phone = $1`,
+          FROM purchase_seats ps
+          JOIN purchases p ON p.order_id = ps.order_id
+          WHERE p.phone = $1`,
         [phoneDigits]
       );
       const already = priorRows?.[0]?.cnt || 0;
+
+      // enforce global cap for non-organizer
       if (!isOrganizer && (already + seats.length > 2)) {
-        return sendJSON(res, 403, { error: `You already have ${already} seat(s). You may reserve up to 2 seats in total.` });
+        return sendJSON(res, 403, {
+          error: `You already have ${already} seat(s). You may reserve up to 2 seats in total.`
+        });
       }
 
       const guestBySeat = new Map((guests || []).map(g => [String(g.seat), String(g.name || '').trim()]));
@@ -438,15 +417,19 @@ const server = http.createServer(async (req, res) => {
       } catch (txErr) {
         try { await client.query('ROLLBACK'); } catch {}
         throw txErr;
-      } finally { client.release(); }
+      } finally {
+        client.release();
+      }
 
-      // Build and email receipt (unchanged)
+      // Build and email receipt
       const reservedAtStr = formatReservedAt(new Date());
       let email_sent = false;
       try {
         const pdfBuffer = await buildReceiptPdf({
-          orderId, seats, guests: guests.map(g => ({ name: g.name, seat: g.seat })), email, reservedAt: reservedAtStr
+          orderId, seats, guests: guests.map(g => ({ name: g.name, seat: g.seat })), email,
+          reservedAt: reservedAtStr
         });
+
         const bodies = buildEmailBodies({ orderId, seats, reservedAt: reservedAtStr });
         const result = await trySendEmail({
           to: email,
@@ -468,6 +451,7 @@ const server = http.createServer(async (req, res) => {
       const override = (u.searchParams.get('email') || '').trim();
       if (!orderId) return sendJSON(res, 400, { ok: false, error: 'Missing orderId' });
 
+      // Try query WITH created_at; if the column doesn't exist, fall back without it
       let r;
       try {
         r = await pool.query(
@@ -478,7 +462,8 @@ const server = http.createServer(async (req, res) => {
           "WHERE p.order_id = $1 GROUP BY p.order_id, p.email, p.created_at",
           [orderId]
         );
-      } catch {
+      } catch (e) {
+        // fallback if created_at column doesn't exist
         r = await pool.query(
           "SELECT p.order_id, p.email, " +
           "       array_agg(ps.seat_id ORDER BY ps.seat_id) AS seats, " +
@@ -512,7 +497,6 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
-    // Static files
     if (req.url === '/' || req.url.endsWith('.html') || req.url.endsWith('.css') || req.url.endsWith('.js')) {
       const fp = path.join(__dirname, req.url === '/' ? 'index.html' : req.url);
       const ext = path.extname(fp);
@@ -531,4 +515,6 @@ const server = http.createServer(async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => console.log('✅ Server running on port ' + PORT));
+server.listen(PORT, '0.0.0.0', () =>
+  console.log('✅ Server running on port ' + PORT)
+);
