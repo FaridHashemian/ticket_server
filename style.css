@@ -50,7 +50,10 @@ input[type=email],input[type=text],input[type=tel]{width:100%;padding:10px;borde
   padding:10px;border-radius:8px 8px 0 0;border:1px solid #e5e7eb;border-bottom:none;
 }
 .seat-map{
-  display:grid;grid-template-columns:repeat(25,1fr);gap:6px;background:#fff;border:1px solid #e5e7eb;border-radius:0 0 8px 8px;padding:12px;align-self:start
+  display:grid;
+  /* UPDATED: max row width is 27 seats */
+  grid-template-columns:repeat(27,1fr);
+  gap:6px;background:#fff;border:1px solid #e5e7eb;border-radius:0 0 8px 8px;padding:12px;align-self:start
 }
 .seat{padding:8px 0;text-align:center;border:1px solid #c7d2fe;border-radius:6px;user-select:none;background:#eff6ff}
 .seat.selected{outline:2px solid #2563eb}

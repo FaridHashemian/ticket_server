@@ -15,6 +15,10 @@ function resolveApiBase() {
   const sameOrigin = window.location.origin.replace(/\/+$/,'');
   return { primary: sameOrigin + '/api', fallback: sameOrigin + '/api' };
 }
+function toE164US(raw){
+  const d = String(raw || '').replace(/\D/g,'').slice(-10);
+  return d ? `+1${d}` : null;
+}
 const API_URLS = resolveApiBase();
 
 async function apiFetch(path, opts = {}) {
@@ -264,7 +268,7 @@ window.addEventListener('DOMContentLoaded', () => {
       await verifyCode(codeInput.value);
 
       const u = auth.currentUser;
-      state.organizer = !!(u && u.phoneNumber === ALLOWED_PHONE);
+      state.organizer = !!(u && toE164US(u.phoneNumber) === toE164US(ALLOWED_PHONE));
 
       showSignedInHeader();
       verifyMsg.textContent = state.organizer ? 'Organizer verified! You can now reserve unlimited seats.' : 'Signed in. You can reserve up to 2 seats online.'; 
@@ -283,7 +287,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   auth.onAuthStateChanged(async (u) => {
     if (u) {
-      state.organizer = u.phoneNumber === ALLOWED_PHONE;
+      state.organizer = !!(u && toE164US(u.phoneNumber) === toE164US(ALLOWED_PHONE));
       setHidden($('#auth-container'), true);
       await loadSeats();
       showSignedInHeader();

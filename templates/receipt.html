@@ -79,24 +79,25 @@
     }
     .when .date { margin-top: 10px; font-size: clamp(32px, 4vw, 44px); }
     .when .time { margin-top: 6px; font-size: clamp(20px, 2.6vw, 28px); }
+    .when .location { margin-top: 6px; font-size: clamp(20px, 2.6vw, 28px); }
 
-    .blurb {
-      max-width: 38ch;
+    .welcome {
+      margin-top: 16px;
+      font-weight: 400;
+      font-size: 16px;
+      line-height: 1.55;
       color: var(--muted);
-      font-size: 16px; line-height: 1.55;
-      text-wrap: pretty;
+      max-width: 40ch;
     }
 
     .guest-strip {
-    grid-column: 1 / -1;
-    align-self: end;
-    background: var(--panel-bg);
-    border-radius: 10px;
-    overflow: hidden;
-    box-shadow: 0 4px 9px rgba(0,0,0,.35);
-
-    /* QR is 150px tall → keep the table above it with extra buffer */
-    margin-bottom: calc(375px + 80px); /* reduced from 80px for higher QR positioning */
+      grid-column: 1 / -1;
+      align-self: end;
+      background: var(--panel-bg);
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 4px 9px rgba(0,0,0,.35);
+      margin-bottom: calc(100px + 40px); /* moved content higher */
     }
 
     table { width: 100%; border-collapse: collapse; }
@@ -112,6 +113,23 @@
 
     tbody { counter-reset: row; }
     td.auto-id::before { counter-increment: row; content: counter(row); }
+
+    .policy {
+        margin-top: 16px;
+      font-weight: 400;
+      font-size: 16px;
+      line-height: 1.55;
+      color: var(--muted);
+      max-width: 40ch;
+      margin-bottom: calc(100px + 40px); /* moved content higher */
+    }
+    .policy b {
+      display: block;
+      color: var(--white);
+      margin-top: 10px;
+      font-weight: 700;
+      letter-spacing: .03em;
+    }
 
     .qr {
       position: absolute;
@@ -154,14 +172,14 @@
         <div class="weekday">SATURDAY</div>
         <div class="date">NOVEMBER 22</div>
         <div class="time">7 PM – 8:30 PM</div>
-        <div class="location">Union Theater</div>
-      </div>
+        <div class="location">Union Theater, 4th Floor</div>
 
-      <div class="blurb">
-        Welcome to the Marjan Farsad Concert hosted by the Iranian Students
-        Association at the University of Arkansas! We’re delighted to have you
-        join us for an evening of music and art. Please arrive at least
-        <b>15 minutes early</b> to ensure a smooth seating experience.
+        <div class="welcome">
+          Welcome to the Marjan Farsad Concert hosted by the Iranian Students
+          Association at the University of Arkansas! We’re delighted to have you
+          join us for an evening of music and art. Please arrive at least
+          <b>15 minutes early</b> to ensure a smooth seating experience.
+        </div>
       </div>
 
       <div class="guest-strip">
@@ -187,8 +205,14 @@
           </tbody>
         </table>
       </div>
-    </div>
+          <div class="policy">
+        <b>Parking Information:</b>
+        <i>Union Parking</i> is available in accordance with the University’s parking rules and regulations.
 
+        <b>No-Show Policy:</b>
+        Although the concert is free, please cancel your ticket at least <u>48 hours</u> before <u>November 22</u> if you can’t attend. Otherwise, we kindly ask you to donate <u>$50</u> to a charity of your choice and share the receipt with us.
+      </div>
+    </div>
     <div class="qr" aria-label="Ticket QR">
       <img src="{{ qrUrl }}" alt="QR Code" />
     </div>
