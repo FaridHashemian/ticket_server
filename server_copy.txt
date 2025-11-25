@@ -1,0 +1,8 @@
+gcloud compute scp Downloads/ticket_server/index.html   instance-20251020-220729:/srv/ticket_server/index.html
+gcloud compute scp Downloads/ticket_server/script.js    instance-20251020-220729:/srv/ticket_server/script.js
+gcloud compute scp Downloads/ticket_server/server.js    instance-20251020-220729:/srv/ticket_server/server.js
+gcloud compute scp Downloads/ticket_server/style.css    instance-20251020-220729:/srv/ticket_server/style.css
+gcloud compute scp Downloads/ticket_server/validate.html instance-20251020-220729:/srv/ticket_server/validate.html
+gcloud compute scp Downloads/ticket_server/reset.sql    instance-20251020-220729:~/reset.sql
+
+gcloud compute scp Downloads/ticket_server/templates/marjan.pptx    instance-20251020-220729:srv/ticket_server/templates/marjan.pptx

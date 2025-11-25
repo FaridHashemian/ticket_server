@@ -156,7 +156,7 @@ function buildEmailBodies({ orderId, seats = [], reservedAt }) {
         Your PDF receipt with QR code is attached to this email. Please bring it (printed or on your phone) for check-in.
       </p>
       <p  style="margin:18px 0 4px;">
-        If you have any questions, or you want to modify your reservation, feel free to contact the following email <b>isa@uark.edu</b>.
+        If you have any questions, wish to modify your reservation, or need a wheelchair-accessible seat, please contact the following email: <b>isa@uark.edu</b>.
       </p>
     </div>
   </div>`.trim();
@@ -181,7 +181,7 @@ function buildEmailBodies({ orderId, seats = [], reservedAt }) {
     '',
     'Your PDF receipt with QR code is attached.',
     '',
-    'If you have any questions, or you want to modify your reservation, feel free to contact the following email isa@uark.edu.'
+    'If you have any questions, wish to modify your reservation, or need a wheelchair-accessible seat, please contact the following email: isa@uark.edu.'
   ].join('\n');
 
   return { html, text };
